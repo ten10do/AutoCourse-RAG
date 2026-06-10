@@ -6,8 +6,10 @@ from rag_core import (
     retrieve_docs,
     has_relevant_docs,
     generate_answer,
+    generate_learning_content,
     clear_knowledge_base,
-    REFUSAL_MESSAGE
+    REFUSAL_MESSAGE,
+    EMPTY_KNOWLEDGE_BASE_MESSAGE
 )
 
 
@@ -164,7 +166,43 @@ if st.button("生成回答"):
             )
 
 
-st.header("3. 当前项目说明")
+st.header("3. 学习辅助功能")
+
+col1, col2, col3 = st.columns(3)
+
+learning_tasks = [
+    (col1, "生成课程总结", "summary"),
+    (col2, "提取核心知识点", "knowledge_points"),
+    (col3, "生成复习题", "review_questions"),
+]
+
+for column, button_label, task_type in learning_tasks:
+    with column:
+        if st.button(button_label):
+            try:
+                with st.spinner(f"正在调用 {selected_model} 生成学习辅助内容..."):
+                    result = generate_learning_content(task_type, provider=selected_model)
+
+                st.subheader(button_label)
+                st.write(result)
+
+            except ValueError as e:
+                if str(e) == EMPTY_KNOWLEDGE_BASE_MESSAGE:
+                    st.warning(EMPTY_KNOWLEDGE_BASE_MESSAGE)
+                else:
+                    st.error("学习辅助内容生成失败。")
+                    st.code(str(e))
+
+            except Exception as e:
+                st.error("学习辅助内容生成失败。")
+                st.write("错误原因：")
+                st.code(str(e))
+                st.warning(
+                    "请确认：1. 已上传 PDF 并建立知识库；2. 所选模型的 API Key 已正确写入 .env；3. 网络正常。"
+                )
+
+
+st.header("4. 当前项目说明")
 
 st.info("""
 当前版本已经升级为 RAG 问答系统：

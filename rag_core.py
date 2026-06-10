@@ -1,5 +1,6 @@
 import os
 import shutil
+from types import SimpleNamespace
 
 from dotenv import load_dotenv
 
@@ -14,6 +15,7 @@ from llm_client import generate_llm_answer
 PERSIST_DIR = "vector_db"
 DATA_DIR = "data"
 REFUSAL_MESSAGE = "知识库中没有找到与该问题相关的内容，请换一个与课程资料相关的问题。"
+EMPTY_KNOWLEDGE_BASE_MESSAGE = "请先上传 PDF 并构建知识库。"
 
 # Chroma 的 similarity_search_with_score 在当前配置下返回的是原始距离值，
 # 不是 0~1 的相似度；距离越小表示越相关。当前项目使用未显式归一化的
@@ -197,6 +199,90 @@ def has_relevant_docs(scored_docs):
 
     best_score = scored_docs[0][1]
     return best_score <= MAX_RELEVANT_DISTANCE
+
+
+def get_representative_docs(k: int = 8):
+    """
+    从当前知识库中取少量代表性 chunk，供课程总结、知识点提取和复习题生成使用。
+
+    这里直接读取 Chroma 中靠前的若干条文本，避免一次性把整个知识库塞入 prompt。
+    返回结构保持为 (doc, score)，便于复用 llm_client 中已有的上下文拼接逻辑。
+    """
+    vector_db = load_vector_db()
+    result = vector_db.get(
+        include=["documents", "metadatas"],
+        limit=k
+    )
+
+    documents = result.get("documents", [])
+    metadatas = result.get("metadatas", [])
+    representative_docs = []
+
+    for index, content in enumerate(documents):
+        if not content or not content.strip():
+            continue
+
+        metadata = metadatas[index] if index < len(metadatas) and metadatas[index] else {}
+        doc = SimpleNamespace(
+            page_content=content,
+            metadata=metadata
+        )
+        representative_docs.append((doc, 0.0))
+
+    return representative_docs
+
+
+def get_learning_task_prompt(task_type: str):
+    prompts = {
+        "summary": """
+请基于当前课程资料生成课程总结，必须包括：
+1）课程资料主要内容
+2）核心章节或主题
+3）重点概念
+4）学习建议
+
+要求：只依据参考资料总结，不要脱离资料自由发挥。
+""",
+        "knowledge_points": """
+请基于当前课程资料提取自动化课程相关核心知识点。
+
+要求：
+1. 每个知识点后面给出简短解释
+2. 尽量按模块分类，例如自动控制、PLC、传感器、电机控制等
+3. 只依据参考资料提取，不要脱离资料自由发挥
+""",
+        "review_questions": """
+请基于当前课程资料生成复习题。
+
+默认题型和数量：
+1. 5 道选择题
+2. 3 道判断题
+3. 2 道简答题
+
+要求：
+1. 每道题都要给出参考答案
+2. 不要生成与资料无关的题目
+3. 只依据参考资料出题，不要脱离资料自由发挥
+"""
+    }
+
+    if task_type not in prompts:
+        raise ValueError("不支持的学习辅助功能。")
+
+    return prompts[task_type]
+
+
+def generate_learning_content(task_type: str, provider: str = "Groq"):
+    docs = get_representative_docs()
+
+    if not docs:
+        raise ValueError(EMPTY_KNOWLEDGE_BASE_MESSAGE)
+
+    return generate_llm_answer(
+        get_learning_task_prompt(task_type),
+        docs,
+        provider=provider
+    )
 
 
 def generate_answer(question: str, docs, provider: str = "Groq"):

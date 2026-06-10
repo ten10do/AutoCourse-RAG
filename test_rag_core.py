@@ -28,10 +28,21 @@ import rag_core
 class FakeVectorDb:
     def __init__(self):
         self.called_with = None
+        self.get_called_with = None
 
     def similarity_search_with_score(self, question, k):
         self.called_with = (question, k)
         return [("doc-a", 0.42)]
+
+    def get(self, include, limit):
+        self.get_called_with = (include, limit)
+        return {
+            "documents": ["chunk-a", "chunk-b"],
+            "metadatas": [
+                {"source": "a.pdf", "page": 0},
+                {"source": "b.pdf", "page": 1},
+            ],
+        }
 
 
 class RetrieveDocsTests(unittest.TestCase):
@@ -138,6 +149,39 @@ class GenerateAnswerTests(unittest.TestCase):
             docs,
             provider="DeepSeek",
         )
+
+
+class LearningAssistantTests(unittest.TestCase):
+    def test_get_representative_docs_loads_limited_chunks_from_vector_db(self):
+        fake_db = FakeVectorDb()
+
+        with patch("rag_core.load_vector_db", return_value=fake_db):
+            docs = rag_core.get_representative_docs(k=2)
+
+        self.assertEqual(fake_db.get_called_with, (["documents", "metadatas"], 2))
+        self.assertEqual(len(docs), 2)
+        self.assertEqual(docs[0][0].page_content, "chunk-a")
+        self.assertEqual(docs[0][0].metadata["source"], "a.pdf")
+        self.assertEqual(docs[0][1], 0.0)
+
+    def test_generate_learning_content_uses_selected_provider_and_task_prompt(self):
+        representative_docs = [(SimpleNamespace(page_content="课程资料", metadata={}), 0.0)]
+
+        with patch("rag_core.get_representative_docs", return_value=representative_docs):
+            with patch("rag_core.generate_llm_answer", return_value="学习辅助结果") as generate_llm_answer:
+                result = rag_core.generate_learning_content("summary", provider="DeepSeek")
+
+        self.assertEqual(result, "学习辅助结果")
+        question, docs = generate_llm_answer.call_args.args
+        self.assertIn("课程资料主要内容", question)
+        self.assertIn("不要脱离资料", question)
+        self.assertEqual(docs, representative_docs)
+        self.assertEqual(generate_llm_answer.call_args.kwargs["provider"], "DeepSeek")
+
+    def test_generate_learning_content_requires_existing_knowledge_base(self):
+        with patch("rag_core.get_representative_docs", return_value=[]):
+            with self.assertRaisesRegex(ValueError, "请先上传 PDF 并构建知识库。"):
+                rag_core.generate_learning_content("summary", provider="Groq")
 
 
 if __name__ == "__main__":
