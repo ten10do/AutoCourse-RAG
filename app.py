@@ -1,4 +1,5 @@
 import os
+
 import streamlit as st
 
 from rag_core import (
@@ -14,46 +15,135 @@ from rag_core import (
 
 
 DATA_DIR = "data"
+VECTOR_DB_DIR = "vector_db"
 
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR)
+os.makedirs(DATA_DIR, exist_ok=True)
 
 
 st.set_page_config(
-    page_title="自动化课程知识库问答系统",
+    page_title="AutoCourse-RAG",
+    page_icon="📚",
     layout="wide"
 )
 
 
-st.title("基于 RAG 的自动化课程知识库问答系统")
+st.markdown(
+    """
+    <style>
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 3rem;
+        max-width: 1180px;
+    }
+    .main-title {
+        font-size: 2.15rem;
+        font-weight: 760;
+        color: #172033;
+        margin-bottom: 0.35rem;
+    }
+    .subtitle {
+        font-size: 1rem;
+        color: #5f6878;
+        margin-bottom: 1.4rem;
+    }
+    .section-card {
+        border: 1px solid #e6eaf0;
+        border-radius: 8px;
+        padding: 1.1rem 1.2rem;
+        background: #ffffff;
+        margin-bottom: 1rem;
+    }
+    .answer-card {
+        border: 1px solid #dfe6ef;
+        border-left: 4px solid #4f6f9f;
+        border-radius: 8px;
+        padding: 1rem 1.15rem;
+        background: #f8fafc;
+        margin-top: 0.75rem;
+        margin-bottom: 1rem;
+    }
+    .muted-text {
+        color: #687385;
+        font-size: 0.92rem;
+    }
+    div[data-testid="stButton"] button {
+        border-radius: 6px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
-st.markdown("""
-本系统支持上传自动化专业课程 PDF，并基于 RAG 技术进行课程资料问答。
 
-当前版本功能：
+def get_page_number(page):
+    if isinstance(page, int):
+        return page + 1
+    return page
 
-1. 上传 PDF 课程资料
-2. 解析 PDF 文本
-3. 使用本地 Embedding 模型生成向量
-4. 使用 Chroma 保存向量数据库
-5. 根据用户问题检索相关资料片段
-6. 调用 Groq 大模型生成中文回答
-7. 显示参考片段和页码来源
-""")
+
+def show_reference_sources(docs):
+    if not docs:
+        st.warning("没有检索到相关内容。")
+        return
+
+    with st.expander("参考来源", expanded=False):
+        for i, (doc, score) in enumerate(docs, start=1):
+            page = get_page_number(doc.metadata.get("page", "未知页码"))
+            source = doc.metadata.get("source", "未知来源")
+            source_name = os.path.basename(source)
+
+            st.markdown(
+                f"**参考片段 {i}**  \n"
+                f"来源文件：`{source_name}`  \n"
+                f"页码：`{page}`  \n"
+                f"距离分数：`{score:.4f}`（越小越相关）"
+            )
+            st.text_area(
+                "参考内容",
+                value=doc.page_content,
+                height=120,
+                key=f"reference_content_{i}",
+                disabled=True
+            )
+            if i != len(docs):
+                st.divider()
+
+
+def show_learning_result(title, content):
+    with st.expander(title, expanded=True):
+        st.write(content)
+
+
+st.markdown(
+    '<div class="main-title">AutoCourse-RAG｜自动化课程智能问答与学习辅助系统</div>',
+    unsafe_allow_html=True
+)
+st.markdown(
+    '<div class="subtitle">支持多 PDF 课程资料上传、RAG 问答、来源追溯、模型切换与学习辅助功能。</div>',
+    unsafe_allow_html=True
+)
 
 
 with st.sidebar:
-    st.header("1. 知识库管理")
+    st.header("系统设置")
+
+    selected_model = st.selectbox(
+        "大模型服务",
+        options=["Groq", "DeepSeek"]
+    )
+
+    st.divider()
+
+    st.subheader("知识库管理")
 
     uploaded_files = st.file_uploader(
-        "请上传自动化课程 PDF",
+        "上传课程 PDF",
         type=["pdf"],
         accept_multiple_files=True
     )
 
+    file_paths = []
     if uploaded_files:
-        file_paths = []
-
         for uploaded_file in uploaded_files:
             file_path = os.path.join(DATA_DIR, uploaded_file.name)
 
@@ -62,65 +152,72 @@ with st.sidebar:
 
             file_paths.append(file_path)
 
-        st.success(f"文件上传成功：共 {len(file_paths)} 个 PDF。")
+        st.success(f"已选择 {len(file_paths)} 个 PDF")
 
-        if st.button("建立/重新构建知识库"):
+    if st.button("构建 / 重新构建知识库", use_container_width=True):
+        if not file_paths:
+            st.warning("请先上传 PDF 文件。")
+        else:
             try:
-                with st.spinner("正在解析 PDF 并建立本地知识库，第一次运行可能较慢..."):
+                with st.spinner("正在解析 PDF 并构建知识库..."):
                     page_count, chunk_count = build_knowledge_base(file_paths)
 
-                st.success(
-                    f"知识库建立完成：共 {page_count} 页，生成 {chunk_count} 个文本块。"
-                )
+                st.success(f"知识库构建完成：{page_count} 页，{chunk_count} 个文本块。")
 
             except Exception as e:
-                st.error("知识库建立失败。")
-                st.write("错误原因：")
+                st.error("知识库构建失败。")
                 st.code(str(e))
-                st.warning(
-                    "建议：请换一个文字版 PDF 测试。不要使用扫描版 PDF 或图片版教材。"
-                )
+                st.warning("建议使用文字版 PDF，不要使用扫描版或图片版教材。")
 
-    st.divider()
-
-    if st.button("清空知识库"):
+    if st.button("清空知识库", use_container_width=True):
         clear_knowledge_base()
         st.success("知识库已清空，请重新上传课程资料。")
 
+    st.divider()
 
-st.header("2. 课程知识问答")
+    st.subheader("当前状态")
+    pdf_count = len([name for name in os.listdir(DATA_DIR) if name.lower().endswith(".pdf")])
+    if os.path.exists(VECTOR_DB_DIR):
+        st.success("知识库：已构建")
+    else:
+        st.info("知识库：未构建")
+    st.caption(f"已保存 PDF：{pdf_count} 个")
 
-st.markdown("""
-你可以输入和 PDF 内容相关的问题，系统会先从知识库中检索相关资料片段，
-再调用 Groq 大模型基于这些片段生成回答。
+    st.divider()
 
-示例问题：
+    st.subheader("使用步骤")
+    st.markdown(
+        """
+        1. 选择 Groq 或 DeepSeek。
+        2. 上传一份或多份课程 PDF。
+        3. 构建知识库。
+        4. 在主页面提问或使用学习辅助功能。
+        """
+    )
 
-- 什么是闭环控制系统？
-- PID 控制器有什么作用？
-- PLC 的扫描周期是什么？
-- 传感器的静态特性有哪些？
-""")
 
-selected_model = st.selectbox(
-    "请选择大模型服务",
-    options=["Groq", "DeepSeek"]
+st.header("1. 智能问答")
+st.markdown(
+    '<div class="muted-text">输入与课程资料相关的问题，系统会先检索知识库，再基于参考片段生成回答。</div>',
+    unsafe_allow_html=True
 )
 
-question = st.text_input(
-    "请输入你的问题",
-    placeholder="例如：什么是闭环控制系统？"
-)
+with st.form("qa_form"):
+    question = st.text_input(
+        "问题",
+        placeholder="例如：水塔水位控制系统的主要任务是什么？"
+    )
 
-top_k = st.slider(
-    "返回参考片段数量",
-    min_value=1,
-    max_value=8,
-    value=4
-)
+    top_k = st.slider(
+        "返回参考片段数量",
+        min_value=1,
+        max_value=8,
+        value=4
+    )
 
+    ask_button = st.form_submit_button("生成回答")
 
-if st.button("生成回答"):
+if ask_button:
     if not question:
         st.warning("请先输入问题。")
     else:
@@ -131,42 +228,28 @@ if st.button("生成回答"):
             if has_relevant_docs(docs):
                 with st.spinner(f"正在调用 {selected_model} 大模型生成回答..."):
                     answer = generate_answer(question, docs, provider=selected_model)
+
+                st.subheader("AI 回答")
+                st.info(answer)
             else:
-                answer = REFUSAL_MESSAGE
+                st.warning(REFUSAL_MESSAGE)
 
-            st.subheader("AI 回答")
-            st.write(answer)
-
-            st.subheader("参考片段")
-            if not docs:
-                st.warning("没有检索到相关内容。")
-            else:
-                for i, (doc, score) in enumerate(docs, start=1):
-                    page = doc.metadata.get("page", "未知页码")
-                    source = doc.metadata.get("source", "未知来源")
-                    source_name = os.path.basename(source)
-
-                    if isinstance(page, int):
-                        page = page + 1
-
-                    with st.expander(
-                        f"参考片段 {i} | 来源：{source_name} | 页码：{page} | 距离分数：{score:.4f}"
-                    ):
-                        st.write(doc.page_content)
-                        st.caption(
-                            f"来源文件：{source_name} | 页码：{page} | 距离分数：{score:.4f}（越小越相关）"
-                        )
+            show_reference_sources(docs)
 
         except Exception as e:
             st.error("生成回答失败。")
             st.write("错误原因：")
             st.code(str(e))
-            st.warning(
-                "请确认：1. 已上传 PDF 并建立知识库；2. 所选模型的 API Key 已正确写入 .env；3. 网络正常。"
-            )
+            st.warning("请确认已构建知识库、所选模型 API Key 已写入 .env，且网络正常。")
 
 
-st.header("3. 学习辅助功能")
+st.divider()
+
+st.header("2. 学习辅助")
+st.markdown(
+    '<div class="muted-text">基于当前知识库中的代表性片段生成总结、知识点和复习题。</div>',
+    unsafe_allow_html=True
+)
 
 col1, col2, col3 = st.columns(3)
 
@@ -178,13 +261,12 @@ learning_tasks = [
 
 for column, button_label, task_type in learning_tasks:
     with column:
-        if st.button(button_label):
+        if st.button(button_label, use_container_width=True):
             try:
                 with st.spinner(f"正在调用 {selected_model} 生成学习辅助内容..."):
                     result = generate_learning_content(task_type, provider=selected_model)
 
-                st.subheader(button_label)
-                st.write(result)
+                show_learning_result(button_label, result)
 
             except ValueError as e:
                 if str(e) == EMPTY_KNOWLEDGE_BASE_MESSAGE:
@@ -197,17 +279,4 @@ for column, button_label, task_type in learning_tasks:
                 st.error("学习辅助内容生成失败。")
                 st.write("错误原因：")
                 st.code(str(e))
-                st.warning(
-                    "请确认：1. 已上传 PDF 并建立知识库；2. 所选模型的 API Key 已正确写入 .env；3. 网络正常。"
-                )
-
-
-st.header("4. 当前项目说明")
-
-st.info("""
-当前版本已经升级为 RAG 问答系统：
-
-PDF 文档 → 文本切分 → 本地向量化 → Chroma 向量数据库 → 用户问题检索 → Groq 大模型生成回答 → 展示参考片段
-
-这个版本可以作为完整的 AI 应用项目写入简历。
-""")
+                st.warning("请确认已构建知识库、所选模型 API Key 已写入 .env，且网络正常。")
