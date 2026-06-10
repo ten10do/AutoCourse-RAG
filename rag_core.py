@@ -11,6 +11,13 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 
 
 PERSIST_DIR = "vector_db"
+REFUSAL_MESSAGE = "知识库中没有找到与该问题相关的内容，请换一个与课程资料相关的问题。"
+
+# Chroma 的 similarity_search_with_score 在当前配置下返回的是原始距离值，
+# 不是 0~1 的相似度；距离越小表示越相关。当前项目使用未显式归一化的
+# HuggingFace Embeddings，结合现有知识库抽样，课程相关问题通常低于 20，
+# 明显无关问题会高于该值，因此用 20.0 作为拒答阈值。
+MAX_RELEVANT_DISTANCE = 20.0
 
 load_dotenv()
 
@@ -134,19 +141,33 @@ def build_knowledge_base(pdf_path: str):
 
 def retrieve_docs(question: str, k: int = 4):
     """
-    根据用户问题，从向量数据库中检索最相关的文本块。
+    根据用户问题，从向量数据库中检索最相关的文本块，并返回距离分数。
     """
     if not question or not question.strip():
         raise ValueError("问题不能为空。")
 
     vector_db = load_vector_db()
 
-    docs = vector_db.similarity_search(
+    docs = vector_db.similarity_search_with_score(
         question,
         k=k
     )
 
     return docs
+
+
+def has_relevant_docs(scored_docs):
+    """
+    判断最相关片段是否达到相关性阈值。
+
+    scored_docs 的元素为 (Document, score)。Chroma 返回的 score 是距离值，
+    分数越小越相关，所以只有最小距离不超过 MAX_RELEVANT_DISTANCE 时才回答。
+    """
+    if not scored_docs:
+        return False
+
+    best_score = scored_docs[0][1]
+    return best_score <= MAX_RELEVANT_DISTANCE
 
 
 def generate_answer(question: str, docs):
@@ -167,7 +188,7 @@ def generate_answer(question: str, docs):
     context = "\n\n".join(
         [
             f"参考片段 {i + 1}：\n{doc.page_content}"
-            for i, doc in enumerate(docs)
+            for i, (doc, score) in enumerate(docs)
         ]
     )
 

@@ -4,8 +4,10 @@ import streamlit as st
 from rag_core import (
     build_knowledge_base,
     retrieve_docs,
+    has_relevant_docs,
     generate_answer,
-    clear_knowledge_base
+    clear_knowledge_base,
+    REFUSAL_MESSAGE
 )
 
 
@@ -113,8 +115,11 @@ if st.button("生成回答"):
             with st.spinner("正在从知识库中检索相关内容..."):
                 docs = retrieve_docs(question, k=top_k)
 
-            with st.spinner("正在调用 Groq 大模型生成回答..."):
-                answer = generate_answer(question, docs)
+            if has_relevant_docs(docs):
+                with st.spinner("正在调用 Groq 大模型生成回答..."):
+                    answer = generate_answer(question, docs)
+            else:
+                answer = REFUSAL_MESSAGE
 
             st.subheader("AI 回答")
             st.write(answer)
@@ -123,16 +128,21 @@ if st.button("生成回答"):
             if not docs:
                 st.warning("没有检索到相关内容。")
             else:
-                for i, doc in enumerate(docs, start=1):
+                for i, (doc, score) in enumerate(docs, start=1):
                     page = doc.metadata.get("page", "未知页码")
                     source = doc.metadata.get("source", "未知来源")
+                    source_name = os.path.basename(source)
 
                     if isinstance(page, int):
                         page = page + 1
 
-                    with st.expander(f"参考片段 {i} | 页码：{page}"):
+                    with st.expander(
+                        f"参考片段 {i} | 来源：{source_name} | 页码：{page} | 距离分数：{score:.4f}"
+                    ):
                         st.write(doc.page_content)
-                        st.caption(f"来源：{source}")
+                        st.caption(
+                            f"来源文件：{source_name} | 页码：{page} | 距离分数：{score:.4f}（越小越相关）"
+                        )
 
         except Exception as e:
             st.error("生成回答失败。")
