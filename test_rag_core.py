@@ -125,5 +125,20 @@ class BuildKnowledgeBaseTests(unittest.TestCase):
             self.assertEqual(list(data_dir.iterdir()), [])
 
 
+class GenerateAnswerTests(unittest.TestCase):
+    def test_generate_answer_delegates_to_selected_llm_provider(self):
+        docs = [(SimpleNamespace(page_content="参考内容"), 0.1)]
+
+        with patch("rag_core.generate_llm_answer", return_value="模型回答") as generate_llm_answer:
+            answer = rag_core.generate_answer("测试问题", docs, provider="DeepSeek")
+
+        self.assertEqual(answer, "模型回答")
+        generate_llm_answer.assert_called_once_with(
+            "测试问题",
+            docs,
+            provider="DeepSeek",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

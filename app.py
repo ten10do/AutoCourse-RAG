@@ -100,6 +100,11 @@ st.markdown("""
 - 传感器的静态特性有哪些？
 """)
 
+selected_model = st.selectbox(
+    "请选择大模型服务",
+    options=["Groq", "DeepSeek"]
+)
+
 question = st.text_input(
     "请输入你的问题",
     placeholder="例如：什么是闭环控制系统？"
@@ -122,8 +127,8 @@ if st.button("生成回答"):
                 docs = retrieve_docs(question, k=top_k)
 
             if has_relevant_docs(docs):
-                with st.spinner("正在调用 Groq 大模型生成回答..."):
-                    answer = generate_answer(question, docs)
+                with st.spinner(f"正在调用 {selected_model} 大模型生成回答..."):
+                    answer = generate_answer(question, docs, provider=selected_model)
             else:
                 answer = REFUSAL_MESSAGE
 
@@ -155,7 +160,7 @@ if st.button("生成回答"):
             st.write("错误原因：")
             st.code(str(e))
             st.warning(
-                "请确认：1. 已上传 PDF 并建立知识库；2. GROQ_API_KEY 已正确写入 .env；3. 网络正常。"
+                "请确认：1. 已上传 PDF 并建立知识库；2. 所选模型的 API Key 已正确写入 .env；3. 网络正常。"
             )
 
 

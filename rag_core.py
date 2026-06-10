@@ -2,12 +2,13 @@ import os
 import shutil
 
 from dotenv import load_dotenv
-from groq import Groq
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
+
+from llm_client import generate_llm_answer
 
 
 PERSIST_DIR = "vector_db"
@@ -198,9 +199,9 @@ def has_relevant_docs(scored_docs):
     return best_score <= MAX_RELEVANT_DISTANCE
 
 
-def generate_answer(question: str, docs):
+def generate_answer(question: str, docs, provider: str = "Groq"):
     """
-    调用 Groq API，根据检索到的参考片段生成中文回答。
+    调用所选大模型 API，根据检索到的参考片段生成中文回答。
     """
     if not question or not question.strip():
         raise ValueError("问题不能为空。")
@@ -208,58 +209,7 @@ def generate_answer(question: str, docs):
     if not docs:
         raise ValueError("没有检索到参考资料，无法生成回答。")
 
-    api_key = os.getenv("GROQ_API_KEY")
-
-    if not api_key:
-        raise ValueError("没有找到 GROQ_API_KEY，请检查 .env 文件。")
-
-    context = "\n\n".join(
-        [
-            f"参考片段 {i + 1}：\n{doc.page_content}"
-            for i, (doc, score) in enumerate(docs)
-        ]
-    )
-
-    client = Groq(
-        api_key=api_key
-    )
-
-    prompt = f"""
-你是一个自动化专业课程助教。
-
-请严格根据下面的参考资料回答用户问题。
-如果参考资料中没有相关信息，请回答：“知识库中没有找到相关内容”。
-
-参考资料：
-{context}
-
-用户问题：
-{question}
-
-回答要求：
-1. 用中文回答
-2. 解释要适合自动化专业本科生理解
-3. 不要编造参考资料中没有的信息
-4. 如果涉及自动控制、PLC、传感器、电机等内容，请尽量结合自动化专业背景说明
-5. 回答尽量条理清晰
-"""
-
-    response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[
-            {
-                "role": "system",
-                "content": "你是一个严谨的自动化专业课程助教，只能根据给定资料回答。"
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        temperature=0.2
-    )
-
-    return response.choices[0].message.content
+    return generate_llm_answer(question, docs, provider=provider)
 
 
 def clear_vector_db():
