@@ -43,23 +43,29 @@ st.markdown("""
 with st.sidebar:
     st.header("1. 知识库管理")
 
-    uploaded_file = st.file_uploader(
+    uploaded_files = st.file_uploader(
         "请上传自动化课程 PDF",
-        type=["pdf"]
+        type=["pdf"],
+        accept_multiple_files=True
     )
 
-    if uploaded_file is not None:
-        file_path = os.path.join(DATA_DIR, uploaded_file.name)
+    if uploaded_files:
+        file_paths = []
 
-        with open(file_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
+        for uploaded_file in uploaded_files:
+            file_path = os.path.join(DATA_DIR, uploaded_file.name)
 
-        st.success(f"文件上传成功：{uploaded_file.name}")
+            with open(file_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
 
-        if st.button("建立知识库"):
+            file_paths.append(file_path)
+
+        st.success(f"文件上传成功：共 {len(file_paths)} 个 PDF。")
+
+        if st.button("建立/重新构建知识库"):
             try:
                 with st.spinner("正在解析 PDF 并建立本地知识库，第一次运行可能较慢..."):
-                    page_count, chunk_count = build_knowledge_base(file_path)
+                    page_count, chunk_count = build_knowledge_base(file_paths)
 
                 st.success(
                     f"知识库建立完成：共 {page_count} 页，生成 {chunk_count} 个文本块。"
@@ -77,7 +83,7 @@ with st.sidebar:
 
     if st.button("清空知识库"):
         clear_knowledge_base()
-        st.success("知识库已清空，请重新上传 PDF 并建立知识库。")
+        st.success("知识库已清空，请重新上传课程资料。")
 
 
 st.header("2. 课程知识问答")

@@ -11,6 +11,7 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 
 
 PERSIST_DIR = "vector_db"
+DATA_DIR = "data"
 REFUSAL_MESSAGE = "知识库中没有找到与该问题相关的内容，请换一个与课程资料相关的问题。"
 
 # Chroma 的 similarity_search_with_score 在当前配置下返回的是原始距离值，
@@ -33,6 +34,11 @@ def load_pdf(file_path: str):
         doc for doc in documents
         if doc.page_content and doc.page_content.strip()
     ]
+
+    source_name = os.path.basename(file_path)
+    for page_number, doc in enumerate(documents):
+        doc.metadata["source"] = source_name
+        doc.metadata.setdefault("page", page_number)
 
     return documents
 
@@ -114,29 +120,51 @@ def load_vector_db():
 
 def build_knowledge_base(pdf_path: str):
     """
-    从 PDF 文件一键建立知识库。
+    从一个或多个 PDF 文件一键建立知识库。
 
     流程：
-    1. 读取 PDF
-    2. 切分文本
-    3. 本地 Embedding 向量化
-    4. 存入 Chroma
+    1. 逐个读取 PDF
+    2. 分别切分文本
+    3. 清空旧向量库，避免新旧文档混在一起
+    4. 本地 Embedding 向量化
+    5. 统一存入同一个 Chroma 向量库
     """
-    documents = load_pdf(pdf_path)
+    pdf_paths = [pdf_path] if isinstance(pdf_path, str) else list(pdf_path)
 
-    if not documents:
+    if not pdf_paths:
+        raise ValueError("请先上传 PDF 文件。")
+
+    all_documents = []
+    all_chunks = []
+
+    for path in pdf_paths:
+        documents = load_pdf(path)
+
+        if not documents:
+            raise ValueError(
+                f"没有从 {os.path.basename(path)} 中读取到有效文字。请使用文字版 PDF，不要使用扫描版 PDF。"
+            )
+
+        chunks = split_documents(documents)
+
+        if not chunks:
+            raise ValueError(f"{os.path.basename(path)} 文本切分失败，没有生成有效文本块。")
+
+        all_documents.extend(documents)
+        all_chunks.extend(chunks)
+
+    if not all_documents:
         raise ValueError(
             "没有从 PDF 中读取到有效文字。请使用文字版 PDF，不要使用扫描版 PDF。"
         )
 
-    chunks = split_documents(documents)
-
-    if not chunks:
+    if not all_chunks:
         raise ValueError("文本切分失败，没有生成有效文本块。")
 
-    build_vector_db(chunks)
+    clear_vector_db()
+    build_vector_db(all_chunks)
 
-    return len(documents), len(chunks)
+    return len(all_documents), len(all_chunks)
 
 
 def retrieve_docs(question: str, k: int = 4):
@@ -234,9 +262,27 @@ def generate_answer(question: str, docs):
     return response.choices[0].message.content
 
 
-def clear_knowledge_base():
+def clear_vector_db():
     """
-    清空本地知识库。
+    清空本地向量库。
     """
     if os.path.exists(PERSIST_DIR):
         shutil.rmtree(PERSIST_DIR)
+
+
+def clear_data_dir():
+    """
+    清空本地上传的 PDF 文件。
+    """
+    if os.path.exists(DATA_DIR):
+        shutil.rmtree(DATA_DIR)
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+
+def clear_knowledge_base():
+    """
+    清空本地知识库和已上传的 PDF 文件。
+    """
+    clear_vector_db()
+    clear_data_dir()

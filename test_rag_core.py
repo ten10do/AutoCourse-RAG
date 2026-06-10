@@ -1,6 +1,9 @@
 import unittest
 import sys
 import types
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.modules.setdefault("dotenv", types.SimpleNamespace(load_dotenv=lambda: None))
@@ -51,6 +54,75 @@ class RetrieveDocsTests(unittest.TestCase):
         self.assertTrue(
             rag_core.has_relevant_docs([("doc-a", rag_core.MAX_RELEVANT_DISTANCE - 0.01)])
         )
+
+
+class BuildKnowledgeBaseTests(unittest.TestCase):
+    def test_build_knowledge_base_combines_multiple_pdfs_and_rebuilds_vector_db(self):
+        docs_by_path = {
+            "data/a.pdf": [SimpleNamespace(metadata={})],
+            "data/b.pdf": [SimpleNamespace(metadata={}), SimpleNamespace(metadata={})],
+        }
+        chunks_by_doc_count = {
+            1: [SimpleNamespace(metadata={"source": "a.pdf", "page": 0})],
+            2: [
+                SimpleNamespace(metadata={"source": "b.pdf", "page": 0}),
+                SimpleNamespace(metadata={"source": "b.pdf", "page": 1}),
+            ],
+        }
+
+        with patch("rag_core.load_pdf", side_effect=lambda path: docs_by_path[path]):
+            with patch(
+                "rag_core.split_documents",
+                side_effect=lambda docs: chunks_by_doc_count[len(docs)],
+            ):
+                with patch("rag_core.clear_vector_db") as clear_vector_db:
+                    with patch("rag_core.build_vector_db") as build_vector_db:
+                        page_count, chunk_count = rag_core.build_knowledge_base(
+                            ["data/a.pdf", "data/b.pdf"]
+                        )
+
+        clear_vector_db.assert_called_once()
+        build_vector_db.assert_called_once()
+        self.assertEqual(page_count, 3)
+        self.assertEqual(chunk_count, 3)
+        self.assertEqual(len(build_vector_db.call_args.args[0]), 3)
+
+    def test_load_pdf_keeps_source_as_filename_and_page_metadata(self):
+        loaded_docs = [
+            SimpleNamespace(page_content="第一页内容", metadata={"source": "old", "page": 0}),
+            SimpleNamespace(page_content="第二页内容", metadata={"page": 1}),
+        ]
+
+        class FakeLoader:
+            def __init__(self, file_path):
+                self.file_path = file_path
+
+            def load(self):
+                return loaded_docs
+
+        with patch("rag_core.PyPDFLoader", FakeLoader):
+            docs = rag_core.load_pdf("data/course-a.pdf")
+
+        self.assertEqual([doc.metadata["source"] for doc in docs], ["course-a.pdf", "course-a.pdf"])
+        self.assertEqual([doc.metadata["page"] for doc in docs], [0, 1])
+
+    def test_clear_knowledge_base_removes_vector_db_and_data_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            vector_dir = temp_path / "vector_db"
+            data_dir = temp_path / "data"
+            vector_dir.mkdir()
+            data_dir.mkdir()
+            (vector_dir / "index.bin").write_text("old vector", encoding="utf-8")
+            (data_dir / "old.pdf").write_text("old pdf", encoding="utf-8")
+
+            with patch("rag_core.PERSIST_DIR", str(vector_dir)):
+                with patch("rag_core.DATA_DIR", str(data_dir)):
+                    rag_core.clear_knowledge_base()
+
+            self.assertFalse(vector_dir.exists())
+            self.assertTrue(data_dir.exists())
+            self.assertEqual(list(data_dir.iterdir()), [])
 
 
 if __name__ == "__main__":
