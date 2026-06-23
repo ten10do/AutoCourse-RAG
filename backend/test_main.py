@@ -46,6 +46,23 @@ class FastApiBackendTests(unittest.TestCase):
             },
         )
 
+    def test_default_rag_mode_uses_light_backend(self):
+        self.assertEqual(getattr(main_module, "RAG_MODE", None), "light")
+        self.assertEqual(
+            getattr(main_module, "RAG_BACKEND_NAME", None),
+            "light_rag_core",
+        )
+
+    def test_full_rag_mode_keeps_existing_backend(self):
+        with patch.dict(os.environ, {"RAG_MODE": "full"}):
+            full_module = importlib.reload(main_module)
+            selected_mode = getattr(full_module, "RAG_MODE", None)
+            selected_backend = getattr(full_module, "RAG_BACKEND_NAME", None)
+
+        importlib.reload(main_module)
+        self.assertEqual(selected_mode, "full")
+        self.assertEqual(selected_backend, "rag_core")
+
     def test_upload_accepts_multiple_pdf_files_and_builds_knowledge_base(self):
         files = [
             ("files", ("course-a.pdf", b"pdf-a", "application/pdf")),
@@ -196,7 +213,7 @@ class FastApiBackendTests(unittest.TestCase):
         sys.path.insert(0, str(backend_dir))
 
         try:
-            for module_name in ("main", "rag_core", "llm_client"):
+            for module_name in ("main", "rag_core", "light_rag_core", "llm_client"):
                 sys.modules.pop(module_name, None)
             render_main = importlib.import_module("main")
         except Exception as exc:
@@ -204,7 +221,7 @@ class FastApiBackendTests(unittest.TestCase):
             render_main = None
         finally:
             sys.path.remove(str(backend_dir))
-            for module_name in ("main", "rag_core", "llm_client"):
+            for module_name in ("main", "rag_core", "light_rag_core", "llm_client"):
                 sys.modules.pop(module_name, None)
 
         self.assertIsNone(import_error)

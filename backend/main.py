@@ -1,3 +1,4 @@
+import importlib
 import os
 from pathlib import Path
 from threading import Lock
@@ -7,30 +8,25 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+RAG_MODE = os.getenv("RAG_MODE", "light").strip().lower()
+if RAG_MODE not in {"full", "light"}:
+    raise RuntimeError("RAG_MODE 只支持 full 或 light。")
+
+RAG_BACKEND_NAME = "rag_core" if RAG_MODE == "full" else "light_rag_core"
 if __package__:
-    from .rag_core import (
-        DATA_DIR,
-        PERSIST_DIR,
-        REFUSAL_MESSAGE,
-        build_knowledge_base,
-        clear_knowledge_base,
-        generate_answer,
-        generate_learning_content,
-        has_relevant_docs,
-        retrieve_docs,
-    )
+    rag_backend = importlib.import_module(f".{RAG_BACKEND_NAME}", package=__package__)
 else:
-    from rag_core import (
-        DATA_DIR,
-        PERSIST_DIR,
-        REFUSAL_MESSAGE,
-        build_knowledge_base,
-        clear_knowledge_base,
-        generate_answer,
-        generate_learning_content,
-        has_relevant_docs,
-        retrieve_docs,
-    )
+    rag_backend = importlib.import_module(RAG_BACKEND_NAME)
+
+DATA_DIR = rag_backend.DATA_DIR
+REFUSAL_MESSAGE = rag_backend.REFUSAL_MESSAGE
+build_knowledge_base = rag_backend.build_knowledge_base
+clear_knowledge_base = rag_backend.clear_knowledge_base
+generate_answer = rag_backend.generate_answer
+generate_learning_content = rag_backend.generate_learning_content
+has_relevant_docs = rag_backend.has_relevant_docs
+is_knowledge_base_ready = rag_backend.is_knowledge_base_ready
+retrieve_docs = rag_backend.retrieve_docs
 
 
 ModelProvider = Literal["Groq", "DeepSeek"]
@@ -97,7 +93,7 @@ class StudyResponse(BaseModel):
 
 
 def get_knowledge_base_status():
-    ready = PERSIST_DIR.exists() and any(PERSIST_DIR.iterdir())
+    ready = is_knowledge_base_ready()
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     pdf_count = sum(1 for path in DATA_DIR.iterdir() if path.suffix.lower() == ".pdf")
     return ready, pdf_count

@@ -90,6 +90,10 @@ def load_vector_db():
     )
 
 
+def is_knowledge_base_ready():
+    return PERSIST_DIR.exists() and any(PERSIST_DIR.iterdir())
+
+
 def build_knowledge_base(pdf_paths):
     if isinstance(pdf_paths, (str, os.PathLike)):
         pdf_paths = [pdf_paths]

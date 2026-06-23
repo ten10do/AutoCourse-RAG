@@ -1,12 +1,9 @@
 fastapi
-uvicorn[standard]
+uvicorn
 python-multipart
-langchain
-langchain-community
-langchain-chroma
-chromadb
 pypdf
 python-dotenv
-sentence-transformers
+scikit-learn
+numpy
 groq
 openai
