@@ -8,7 +8,10 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from .llm_client import generate_llm_answer
+if __package__:
+    from .llm_client import generate_llm_answer
+else:
+    from llm_client import generate_llm_answer
 
 
 BASE_DIR = Path(__file__).resolve().parent

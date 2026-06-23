@@ -1,3 +1,6 @@
+import importlib
+import os
+from pathlib import Path
 import unittest
 import sys
 import types
@@ -22,6 +25,7 @@ sys.modules.setdefault(
 )
 
 from backend.main import app
+import backend.main as main_module
 
 
 class FastApiBackendTests(unittest.TestCase):
@@ -164,6 +168,47 @@ class FastApiBackendTests(unittest.TestCase):
                     response.headers["access-control-allow-origin"],
                     origin,
                 )
+
+    def test_cors_allows_frontend_origin_from_environment(self):
+        frontend_origin = "https://autocourse-rag.example.com"
+
+        with patch.dict(os.environ, {"FRONTEND_ORIGIN": frontend_origin}):
+            deployed_module = importlib.reload(main_module)
+            deployed_client = TestClient(deployed_module.app)
+            response = deployed_client.options(
+                "/health",
+                headers={
+                    "Origin": frontend_origin,
+                    "Access-Control-Request-Method": "GET",
+                },
+            )
+
+        importlib.reload(main_module)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.headers["access-control-allow-origin"],
+            frontend_origin,
+        )
+
+    def test_render_root_directory_can_import_main_app(self):
+        backend_dir = Path(__file__).resolve().parent
+        import_error = None
+        sys.path.insert(0, str(backend_dir))
+
+        try:
+            for module_name in ("main", "rag_core", "llm_client"):
+                sys.modules.pop(module_name, None)
+            render_main = importlib.import_module("main")
+        except Exception as exc:
+            import_error = exc
+            render_main = None
+        finally:
+            sys.path.remove(str(backend_dir))
+            for module_name in ("main", "rag_core", "llm_client"):
+                sys.modules.pop(module_name, None)
+
+        self.assertIsNone(import_error)
+        self.assertIsNotNone(getattr(render_main, "app", None))
 
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from threading import Lock
 from typing import Literal
@@ -6,21 +7,46 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from .rag_core import (
-    DATA_DIR,
-    PERSIST_DIR,
-    REFUSAL_MESSAGE,
-    build_knowledge_base,
-    clear_knowledge_base,
-    generate_answer,
-    generate_learning_content,
-    has_relevant_docs,
-    retrieve_docs,
-)
+if __package__:
+    from .rag_core import (
+        DATA_DIR,
+        PERSIST_DIR,
+        REFUSAL_MESSAGE,
+        build_knowledge_base,
+        clear_knowledge_base,
+        generate_answer,
+        generate_learning_content,
+        has_relevant_docs,
+        retrieve_docs,
+    )
+else:
+    from rag_core import (
+        DATA_DIR,
+        PERSIST_DIR,
+        REFUSAL_MESSAGE,
+        build_knowledge_base,
+        clear_knowledge_base,
+        generate_answer,
+        generate_learning_content,
+        has_relevant_docs,
+        retrieve_docs,
+    )
 
 
 ModelProvider = Literal["Groq", "DeepSeek"]
 knowledge_base_lock = Lock()
+LOCAL_FRONTEND_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+
+def get_allowed_origins():
+    origins = list(LOCAL_FRONTEND_ORIGINS)
+    frontend_origin = os.getenv("FRONTEND_ORIGIN", "").strip().rstrip("/")
+    if frontend_origin and frontend_origin not in origins:
+        origins.append(frontend_origin)
+    return origins
 
 app = FastAPI(
     title="AutoCourse-RAG API",
@@ -30,10 +56,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=get_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
