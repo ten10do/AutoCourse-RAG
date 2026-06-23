@@ -1,8 +1,15 @@
 .env
 venv/
+node_modules/
 __pycache__/
+*.pyc
 data/
 vector_db/
+backend/data/
+backend/vector_db/
+frontend/node_modules/
+frontend/dist/
+dist/
 *.pkl
 .DS_Store
 .streamlit/
