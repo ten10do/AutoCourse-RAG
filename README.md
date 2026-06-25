@@ -269,11 +269,11 @@ npm run build
 
 ## 功能截图
 
-以下截图基于 React + FastAPI 版本和 3 份自动控制课程测试资料生成。
+以下截图基于 React + FastAPI 版本和 3 份自动控制课程测试资料生成，重点展示 PDF 上传、RAG 问答、来源追溯、学习工具和响应式页面。
 
-### React 前端首页
+### 学习工作台首页
 
-![React 前端首页](screenshots/01_react_home.png)
+![学习工作台首页](screenshots/01_home_workspace.png)
 
 ### 多 PDF 上传与知识库管理
 
@@ -293,7 +293,7 @@ npm run build
 
 ### 移动端响应式布局
 
-![移动端响应式布局](screenshots/06_responsive_layout.png)
+![移动端响应式布局](screenshots/06_mobile_layout.png)
 
 ## 项目亮点
 
