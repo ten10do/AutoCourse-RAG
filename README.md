@@ -1,10 +1,8 @@
-# AutoCourse-RAG
-
-面向自动化课程资料的智能问答与学习辅助系统
+# 基于 RAG 的自动化课程智能学习平台
 
 ## 项目简介
 
-AutoCourse-RAG 是一个采用 React + FastAPI 前后端分离架构的课程资料 RAG（Retrieval-Augmented Generation）应用。用户可以上传多份自动化课程 PDF，构建本地向量知识库，并通过 Groq 或 DeepSeek 模型完成课程问答、来源追溯、课程总结、知识点提取和复习题生成。
+基于 RAG 的自动化课程智能学习平台是一个采用 React + FastAPI 前后端分离架构的课程资料 RAG（Retrieval-Augmented Generation）应用。用户可以上传多份自动化课程 PDF，构建本地向量知识库，并通过 Groq 或 DeepSeek 模型完成课程问答、来源追溯、课程总结、知识点提取和复习题生成。
 
 系统将大模型回答限制在课程资料检索结果内，并通过距离阈值拒绝相关性不足的问题，降低脱离资料生成内容的风险。项目同时保留原有 Streamlit 版本，便于对比单体应用与前后端分离架构的实现方式。
 
