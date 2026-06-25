@@ -105,7 +105,7 @@ flowchart LR
 
 ## 前端功能
 
-前端使用 Vite + React + JavaScript 构建，采用原生 CSS 实现工业蓝灰风格和基础响应式布局。
+前端使用 Vite + React + JavaScript 构建，采用原生 CSS 实现组件化页面、交互状态展示和基础响应式布局。
 
 - 使用 `Sidebar`、`UploadPanel`、`ChatPanel`、`SourceCard`、`StudyTools` 等组件拆分页面职责。
 - 通过 Axios 统一封装健康检查、上传、问答、学习辅助和知识库重置请求。
@@ -298,7 +298,7 @@ npm run build
 ## 项目亮点
 
 - **React 组件化开发**：按上传、问答、来源和学习辅助等职责拆分组件，通过 Props 与状态组合完整页面。
-- **原生 Web 页面实现**：使用 HTML、CSS 和 JavaScript 完成正式、响应式的工业蓝灰界面，不依赖复杂 UI 框架。
+- **原生 Web 页面实现**：使用 HTML、CSS 和 JavaScript 完成 PDF 上传、模型选择、问答工作区、来源追溯和学习工具展示，不依赖复杂 UI 框架。
 - **前后端分离**：React 通过 Axios 调用 FastAPI RESTful API，接口职责和数据模型清晰。
 - **完整 RAG 链路**：覆盖 PDF 解析、chunk 切分、Embedding、Chroma 持久化、语义检索、阈值判断和回答生成。
 - **多文档知识库**：支持多份课程资料统一向量化，并保留每个 chunk 的来源文件和页码信息。
