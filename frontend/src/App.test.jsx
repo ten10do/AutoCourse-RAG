@@ -14,6 +14,7 @@ vi.mock('./api', () => ({
   askQuestion: vi.fn(),
   generateStudyContent: vi.fn(),
   resetKnowledgeBase: vi.fn(),
+  getApiErrorMessage: vi.fn((error, fallback) => error?.message || fallback),
 }))
 
 describe('AutoCourse-RAG React application', () => {
@@ -28,13 +29,12 @@ describe('AutoCourse-RAG React application', () => {
   it('renders the required frontend modules and backend status', async () => {
     render(<App />)
 
-    expect(
-      screen.getByText('AutoCourse-RAG｜自动化课程智能问答与学习辅助系统'),
-    ).toBeInTheDocument()
-    expect(screen.getByLabelText('模型选择')).toBeInTheDocument()
-    expect(screen.getByText('多 PDF 上传')).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: '智能问答' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: '参考来源' })).toBeInTheDocument()
+    expect(screen.getByText('AutoCourse RAG')).toBeInTheDocument()
+    expect(screen.getByText('自动化课程智能学习平台')).toBeInTheDocument()
+    expect(screen.getAllByLabelText('模型选择')[0]).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '上传 PDF' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '与知识库对话' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '来源追溯' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: '学习辅助' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '生成课程总结' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '提取核心知识点' })).toBeInTheDocument()
@@ -59,7 +59,7 @@ describe('AutoCourse-RAG React application', () => {
     fireEvent.change(screen.getByLabelText('课程问题'), {
       target: { value: '什么是 PLC 扫描周期？' },
     })
-    fireEvent.click(screen.getByRole('button', { name: '提交问题' }))
+    fireEvent.click(screen.getByLabelText('提交问题'))
 
     expect(await screen.findByText('当前知识库回答')).toBeInTheDocument()
 

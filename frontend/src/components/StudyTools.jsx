@@ -7,19 +7,19 @@ const studyTasks = [
   {
     id: 'summary',
     label: '生成课程总结',
-    description: '归纳课程主题、重点概念与学习建议。',
+    description: '归纳课程主要内容、核心主题、重点概念和学习建议。',
     icon: BookOpenCheck,
   },
   {
     id: 'knowledge_points',
     label: '提取核心知识点',
-    description: '按课程模块整理知识点并给出解释。',
+    description: '按模块整理自动化课程知识点，并给出简短解释。',
     icon: ListTree,
   },
   {
     id: 'quiz',
     label: '生成复习题',
-    description: '生成选择、判断和简答题及参考答案。',
+    description: '生成选择题、判断题、简答题和参考答案。',
     icon: ClipboardList,
   },
 ]
@@ -43,12 +43,12 @@ export default function StudyTools({ modelProvider }) {
   }
 
   return (
-    <section className="panel study-panel" aria-labelledby="study-title">
-      <div className="panel-heading">
+    <section className="study-panel" id="课程总结" aria-labelledby="study-title">
+      <div className="study-panel-header">
         <div>
-          <p className="eyebrow">STUDY WORKBENCH</p>
+          <p className="eyebrow">STUDY TOOLS</p>
           <h2 id="study-title">学习辅助</h2>
-          <p>从知识库代表性片段中提炼课程资料，不脱离原始文档。</p>
+          <p>从当前知识库中提炼课程总结、核心知识点和复习题。</p>
         </div>
       </div>
 
@@ -58,7 +58,9 @@ export default function StudyTools({ modelProvider }) {
           const isLoading = activeTask === task.id
           return (
             <article className="study-action" key={task.id}>
-              <Icon size={22} aria-hidden="true" />
+              <div className="study-icon">
+                <Icon size={22} aria-hidden="true" />
+              </div>
               <h3>{task.label}</h3>
               <p>{task.description}</p>
               <button

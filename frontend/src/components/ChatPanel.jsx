@@ -1,10 +1,9 @@
 import { useState } from 'react'
-import { MessageSquareText, Search, Send } from 'lucide-react'
+import { MessageSquareText, Search, Send, Sparkles } from 'lucide-react'
 
 import { askQuestion, getApiErrorMessage } from '../api'
-import SourceCard from './SourceCard'
 
-export default function ChatPanel({ modelProvider }) {
+export default function ChatPanel({ modelProvider, onResult }) {
   const [question, setQuestion] = useState('')
   const [topK, setTopK] = useState(4)
   const [result, setResult] = useState(null)
@@ -27,7 +26,8 @@ export default function ChatPanel({ modelProvider }) {
         modelProvider,
         topK,
       })
-      setResult(payload)
+      setResult({ ...payload, question: normalizedQuestion })
+      onResult?.(payload)
     } catch (requestError) {
       setError(getApiErrorMessage(requestError, '问答请求失败。'))
     } finally {
@@ -38,84 +38,103 @@ export default function ChatPanel({ modelProvider }) {
   const sources = result?.sources || []
 
   return (
-    <>
-      <section className="panel" aria-labelledby="chat-title">
-        <div className="panel-heading">
-          <div className="panel-icon" aria-hidden="true">
-            <MessageSquareText size={21} />
-          </div>
-          <div>
-            <p className="eyebrow">RAG QUERY</p>
-            <h2 id="chat-title">智能问答</h2>
-            <p>检索课程知识库，并基于可信片段生成可追溯回答。</p>
-          </div>
+    <section className="chat-workspace" aria-labelledby="chat-title">
+      <div className="workspace-hero">
+        <div>
+          <p className="eyebrow">AI STUDY WORKSPACE</p>
+          <h1 id="chat-title">与知识库对话</h1>
+          <p>
+            基于已上传课程资料进行语义检索，回答会保留来源文件、页码和距离分数。
+          </p>
         </div>
+        <div className="hero-chip">
+          <Sparkles size={17} />
+          <span>{modelProvider}</span>
+        </div>
+      </div>
 
-        <form className="chat-form" onSubmit={handleSubmit}>
-          <label className="field-label" htmlFor="question-input">
-            课程问题
-          </label>
-          <textarea
-            id="question-input"
-            value={question}
-            onChange={(event) => setQuestion(event.target.value)}
-            placeholder="例如：PLC 的扫描周期是什么？"
-            rows={4}
-          />
-
-          <div className="chat-controls">
-            <label htmlFor="top-k">参考片段：{topK}</label>
-            <input
-              id="top-k"
-              type="range"
-              min="1"
-              max="8"
-              value={topK}
-              onChange={(event) => setTopK(Number(event.target.value))}
-            />
-            <button className="button button-primary" type="submit" disabled={isLoading}>
-              {isLoading ? <span className="spinner" aria-hidden="true" /> : <Send size={17} />}
-              {isLoading ? '正在生成...' : '提交问题'}
-            </button>
+      <div className="chat-thread">
+        {!result && !isLoading && (
+          <div className="assistant-welcome">
+            <div className="panel-icon" aria-hidden="true">
+              <MessageSquareText size={21} />
+            </div>
+            <div>
+              <h2>开始一次课程资料问答</h2>
+              <p>
+                例如：请总结自动控制系统中反馈控制的基本思想，并说明稳定性分析为什么重要。
+              </p>
+            </div>
           </div>
-        </form>
+        )}
+
+        {result?.question && (
+          <div className="message-row user">
+            <div className="message-bubble user-bubble">{result.question}</div>
+          </div>
+        )}
+
+        {isLoading && (
+          <div className="message-row assistant">
+            <div className="message-bubble assistant-card loading-card">
+              <span className="spinner dark" aria-hidden="true" />
+              <span>正在检索知识库并生成回答...</span>
+            </div>
+          </div>
+        )}
 
         {error && <div className="alert error" role="alert">{error}</div>}
 
         {result && (
-          <div className={`answer-surface ${result.is_refused ? 'refused' : ''}`}>
-            <div className="answer-label">
-              <Search size={16} aria-hidden="true" />
-              {result.is_refused ? '相关性不足' : `${modelProvider} 回答`}
-            </div>
-            <div className="rich-text">{result.answer}</div>
+          <div className="message-row assistant">
+            <article className={`message-bubble assistant-card ${result.is_refused ? 'refused' : ''}`}>
+              <div className="answer-label">
+                <Search size={16} aria-hidden="true" />
+                {result.is_refused ? '相关性不足' : `${modelProvider} 回答`}
+              </div>
+              <div className="rich-text">{result.answer}</div>
+              {sources.length > 0 && (
+                <div className="source-pills" aria-label="回答来源">
+                  {sources.slice(0, 3).map((source, index) => (
+                    <span key={`${source.source}-${source.page}-${index}`}>
+                      {source.source} · 第 {source.page} 页
+                    </span>
+                  ))}
+                  {sources.length > 3 && <span>+{sources.length - 3} 个来源</span>}
+                </div>
+              )}
+            </article>
           </div>
         )}
-      </section>
+      </div>
 
-      <section className="panel sources-panel" aria-labelledby="sources-title">
-        <div className="panel-heading compact">
-          <div>
-            <p className="eyebrow">TRACEABILITY</p>
-            <h2 id="sources-title">参考来源</h2>
-          </div>
-          <span className="count-badge">{sources.length} 条</span>
+      <form className="chat-composer" onSubmit={handleSubmit}>
+        <label className="field-label" htmlFor="question-input">
+          课程问题
+        </label>
+        <textarea
+          id="question-input"
+          value={question}
+          onChange={(event) => setQuestion(event.target.value)}
+          placeholder="请输入你想向课程知识库提问的内容..."
+          rows={3}
+        />
+
+        <div className="composer-footer">
+          <label htmlFor="top-k">参考片段：{topK}</label>
+          <input
+            id="top-k"
+            type="range"
+            min="1"
+            max="8"
+            value={topK}
+            onChange={(event) => setTopK(Number(event.target.value))}
+          />
+          <button className="send-button" type="submit" disabled={isLoading} aria-label="提交问题">
+            {isLoading ? <span className="spinner" aria-hidden="true" /> : <Send size={19} />}
+          </button>
         </div>
-
-        {sources.length > 0 ? (
-          <div className="source-list">
-            {sources.map((source, index) => (
-              <SourceCard
-                key={`${source.source}-${source.page}-${index}`}
-                source={source}
-                index={index}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="empty-state">提交问题后，检索来源将在此处展示。</div>
-        )}
-      </section>
-    </>
+      </form>
+    </section>
   )
 }

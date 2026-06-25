@@ -23,7 +23,7 @@ export default function UploadPanel({
     )
 
     if (pdfFiles.length !== candidates.length) {
-      setValidationError('仅支持 PDF 文件。')
+      setValidationError('仅支持上传 PDF 文件。')
     } else {
       setValidationError('')
     }
@@ -48,10 +48,10 @@ export default function UploadPanel({
   }
 
   return (
-    <section className="sidebar-section" aria-labelledby="upload-title">
+    <section className="sidebar-card" id="上传 PDF" aria-labelledby="upload-title">
       <div className="section-label-row">
         <UploadCloud size={18} aria-hidden="true" />
-        <h2 id="upload-title">多 PDF 上传</h2>
+        <h2 id="upload-title">上传 PDF</h2>
       </div>
 
       <div
@@ -64,9 +64,9 @@ export default function UploadPanel({
         onDragLeave={() => setIsDragging(false)}
         onDrop={handleDrop}
       >
-        <UploadCloud size={26} aria-hidden="true" />
-        <p>拖拽 PDF 到此处</p>
-        <span>或</span>
+        <UploadCloud size={28} aria-hidden="true" />
+        <p>拖拽课程 PDF 到此处</p>
+        <span>支持一次上传多份资料</span>
         <button
           className="button button-secondary button-small"
           type="button"
