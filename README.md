@@ -306,3 +306,13 @@ npm run build
 - **免费云部署适配**：React + Vite 部署到 Netlify，FastAPI 部署到 Render Free，并通过环境变量管理跨域来源、RAG 模式和服务地址。
 - **垂直场景落地**：围绕自动控制、PLC、传感器、电机控制等自动化课程资料提供问答和学习辅助能力。
 - **新旧架构并存**：保留 Streamlit 实现，同时提供 React + FastAPI 版本，展示从快速原型到前后端分离应用的演进过程。
+
+## RAG 评测与自动回归
+
+轻量模式提供完全离线、确定性的 RAG 回归评测，使用固定的自编自动控制课程资料驱动生产环境中的分块、TF-IDF 检索、排序和拒答逻辑；测试不依赖真实大模型 API。
+
+```powershell
+.\venv\Scripts\python.exe -m backend.evaluation.run
+```
+
+评测报告 Hit Rate@1、Hit Rate@3、MRR、来源元数据完整性、拒答准确率与重复运行稳定性；任一质量门槛未达到时命令返回非零退出码。GitHub Actions 会在面向 `main` 的提交和 Pull Request 中并行运行后端测试、离线评测、前端测试与构建。

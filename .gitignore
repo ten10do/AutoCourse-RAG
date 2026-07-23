@@ -2,7 +2,9 @@
 venv/
 node_modules/
 __pycache__/
+.pytest_cache/
 *.pyc
+*.log
 data/
 vector_db/
 backend/data/

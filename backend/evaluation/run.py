@@ -1,0 +1,336 @@
+"""Run a deterministic, offline regression evaluation of the light RAG pipeline."""
+
+from __future__ import annotations
+
+import importlib
+import json
+import math
+from contextlib import contextmanager
+from pathlib import Path
+from unittest import mock
+
+
+DATASET_PATH = Path(__file__).resolve().parent / "fixtures" / "dataset.json"
+QUALITY_GATES = {
+    "hit_rate_at_3": 0.80,
+    "mrr": 0.70,
+    "metadata_completeness": 1.00,
+    "refusal_accuracy": 0.80,
+}
+
+
+class _FixturePage:
+    def __init__(self, text: str):
+        self._text = text
+
+    def extract_text(self) -> str:
+        return self._text
+
+
+class _FixturePdfReader:
+    def __init__(self, path: str, documents_by_source: dict[str, dict]):
+        source = Path(path).name
+        if source not in documents_by_source:
+            raise FileNotFoundError(f"No offline fixture for {source}")
+        self.pages = [
+            _FixturePage(page_text)
+            for page_text in documents_by_source[source]["pages"]
+        ]
+
+
+def load_dataset(path: Path = DATASET_PATH) -> dict:
+    with path.open("r", encoding="utf-8") as dataset_file:
+        dataset = json.load(dataset_file)
+    validate_dataset(dataset)
+    return dataset
+
+
+def validate_dataset(dataset: dict) -> None:
+    documents = dataset.get("documents")
+    cases = dataset.get("cases")
+    if not isinstance(documents, list) or len(documents) < 4:
+        raise ValueError("Evaluation dataset requires at least four documents.")
+    if not isinstance(cases, list) or len(cases) < 12:
+        raise ValueError("Evaluation dataset requires at least twelve cases.")
+
+    sources = []
+    for document in documents:
+        source = document.get("source")
+        pages = document.get("pages")
+        keywords = document.get("keywords")
+        if not isinstance(source, str) or not source.endswith(".pdf"):
+            raise ValueError("Every fixture document requires a PDF source name.")
+        if not isinstance(pages, list) or not pages or not all(
+            isinstance(page, str) and page.strip() for page in pages
+        ):
+            raise ValueError(f"Fixture {source} requires non-empty text pages.")
+        if not isinstance(keywords, list) or not keywords or not all(
+            isinstance(keyword, str) and keyword.strip() for keyword in keywords
+        ):
+            raise ValueError(f"Fixture {source} requires topic keywords.")
+        sources.append(source)
+    if len(sources) != len(set(sources)):
+        raise ValueError("Fixture source names must be unique.")
+
+    source_set = set(sources)
+    case_ids = set()
+    required_case_fields = {
+        "question",
+        "expected_sources",
+        "expected_keywords",
+        "should_refuse",
+    }
+    for case in cases:
+        if not required_case_fields.issubset(case):
+            raise ValueError("Each evaluation case is missing a required field.")
+        case_id = case.get("id")
+        if not isinstance(case_id, str) or not case_id or case_id in case_ids:
+            raise ValueError("Evaluation case IDs must be non-empty and unique.")
+        case_ids.add(case_id)
+        if not isinstance(case["question"], str) or not case["question"].strip():
+            raise ValueError(f"Case {case_id} requires a non-empty question.")
+        if not isinstance(case["should_refuse"], bool):
+            raise ValueError(f"Case {case_id} has an invalid should_refuse value.")
+        if not isinstance(case["expected_sources"], list) or not set(
+            case["expected_sources"]
+        ).issubset(source_set):
+            raise ValueError(f"Case {case_id} references an unknown source.")
+        if not isinstance(case["expected_keywords"], list) or not all(
+            isinstance(keyword, str) and keyword
+            for keyword in case["expected_keywords"]
+        ):
+            raise ValueError(f"Case {case_id} has invalid expected keywords.")
+        if case["should_refuse"] and case["expected_sources"]:
+            raise ValueError(f"Refusal case {case_id} must not expect a source.")
+        if not case["should_refuse"] and not case["expected_sources"]:
+            raise ValueError(f"Answerable case {case_id} must expect a source.")
+
+
+def _load_light_rag_core():
+    """Import the production retriever without loading environment files."""
+    dotenv = importlib.import_module("dotenv")
+    original_load_dotenv = dotenv.load_dotenv
+    dotenv.load_dotenv = lambda *args, **kwargs: False
+    try:
+        return importlib.import_module("backend.light_rag_core")
+    finally:
+        dotenv.load_dotenv = original_load_dotenv
+
+
+@contextmanager
+def offline_knowledge_base(dataset: dict):
+    """Build the real in-memory light index from deterministic fixture pages."""
+    light_rag_core = _load_light_rag_core()
+    documents_by_source = {
+        document["source"]: document for document in dataset["documents"]
+    }
+    previous_state = (
+        light_rag_core._documents,
+        light_rag_core._vectorizer,
+        light_rag_core._tfidf_matrix,
+    )
+    reader_factory = lambda path: _FixturePdfReader(path, documents_by_source)
+
+    try:
+        with mock.patch.object(
+            light_rag_core, "PdfReader", side_effect=reader_factory
+        ):
+            page_count, chunk_count = light_rag_core.build_knowledge_base(
+                [Path(source) for source in documents_by_source]
+            )
+        yield light_rag_core, page_count, chunk_count
+    finally:
+        (
+            light_rag_core._documents,
+            light_rag_core._vectorizer,
+            light_rag_core._tfidf_matrix,
+        ) = previous_state
+
+
+def _normalize_result(document, score: float) -> dict:
+    return {
+        "source": document.metadata.get("source"),
+        "page": document.metadata.get("page"),
+        "content": document.page_content,
+        "score": score,
+    }
+
+
+def calculate_metrics(cases: list[dict], case_results: list[dict]) -> dict:
+    results_by_id = {result["id"]: result for result in case_results}
+    answerable_cases = [case for case in cases if not case["should_refuse"]]
+
+    hit_at_1 = 0
+    hit_at_3 = 0
+    reciprocal_rank_total = 0.0
+    correct_refusal_decisions = 0
+    refused_out_of_scope = 0
+    refusal_cases = [case for case in cases if case["should_refuse"]]
+    complete_metadata = 0
+    total_results = 0
+
+    for case in cases:
+        result = results_by_id[case["id"]]
+        actual_refuse = result["actual_refuse"]
+        if actual_refuse == case["should_refuse"]:
+            correct_refusal_decisions += 1
+        if case["should_refuse"] and actual_refuse:
+            refused_out_of_scope += 1
+
+        for item in result["results"]:
+            total_results += 1
+            if (
+                isinstance(item.get("source"), str)
+                and bool(item["source"])
+                and isinstance(item.get("page"), int)
+                and not isinstance(item["page"], bool)
+                and item["page"] >= 0
+                and isinstance(item.get("content"), str)
+                and bool(item["content"].strip())
+                and isinstance(item.get("score"), (int, float))
+                and not isinstance(item["score"], bool)
+                and math.isfinite(item["score"])
+            ):
+                complete_metadata += 1
+
+        if case["should_refuse"]:
+            continue
+        expected_sources = set(case["expected_sources"])
+        ranked_sources = [item["source"] for item in result["results"]]
+        if ranked_sources and ranked_sources[0] in expected_sources:
+            hit_at_1 += 1
+        if expected_sources.intersection(ranked_sources[:3]):
+            hit_at_3 += 1
+        for rank, source in enumerate(ranked_sources, start=1):
+            if source in expected_sources:
+                reciprocal_rank_total += 1.0 / rank
+                break
+
+    answerable_count = len(answerable_cases)
+    refusal_count = len(refusal_cases)
+    return {
+        "hit_rate_at_1": hit_at_1 / answerable_count if answerable_count else 0.0,
+        "hit_rate_at_3": hit_at_3 / answerable_count if answerable_count else 0.0,
+        "mrr": (
+            reciprocal_rank_total / answerable_count if answerable_count else 0.0
+        ),
+        "metadata_completeness": (
+            complete_metadata / total_results if total_results else 0.0
+        ),
+        "refusal_accuracy": (
+            refused_out_of_scope / refusal_count if refusal_count else 0.0
+        ),
+        "decision_accuracy": (
+            correct_refusal_decisions / len(cases) if cases else 0.0
+        ),
+    }
+
+
+def evaluate_once(dataset: dict, top_k: int = 3) -> dict:
+    case_results = []
+    with offline_knowledge_base(dataset) as (
+        light_rag_core,
+        page_count,
+        chunk_count,
+    ):
+        for case in dataset["cases"]:
+            scored_documents = light_rag_core.retrieve_docs(
+                case["question"], k=top_k
+            )
+            results = [
+                _normalize_result(document, score)
+                for document, score in scored_documents
+            ]
+            combined_content = "\n".join(item["content"] for item in results)
+            case_results.append(
+                {
+                    "id": case["id"],
+                    "actual_refuse": not light_rag_core.has_relevant_docs(
+                        scored_documents
+                    ),
+                    "keyword_match": all(
+                        keyword in combined_content
+                        for keyword in case["expected_keywords"]
+                    ),
+                    "results": results,
+                }
+            )
+
+    return {
+        "document_count": len(dataset["documents"]),
+        "case_count": len(dataset["cases"]),
+        "page_count": page_count,
+        "chunk_count": chunk_count,
+        "case_results": case_results,
+        "metrics": calculate_metrics(dataset["cases"], case_results),
+    }
+
+
+def _stability_signature(report: dict) -> tuple:
+    return tuple(
+        (
+            case_result["id"],
+            case_result["actual_refuse"],
+            tuple(
+                (
+                    item["source"],
+                    item["page"],
+                    round(item["score"], 10),
+                )
+                for item in case_result["results"]
+            ),
+        )
+        for case_result in report["case_results"]
+    )
+
+
+def run_evaluation(
+    dataset_path: Path = DATASET_PATH, repeat_runs: int = 2
+) -> dict:
+    if repeat_runs < 2:
+        raise ValueError("repeat_runs must be at least 2 to verify stability.")
+    dataset = load_dataset(dataset_path)
+    reports = [evaluate_once(dataset) for _ in range(repeat_runs)]
+    report = reports[0]
+    first_signature = _stability_signature(report)
+    report["stable"] = all(
+        _stability_signature(candidate) == first_signature
+        for candidate in reports[1:]
+    )
+    report["gates_passed"] = quality_gates_pass(report)
+    return report
+
+
+def quality_gates_pass(report: dict) -> bool:
+    metrics = report["metrics"]
+    return bool(report.get("stable")) and all(
+        metrics[metric] >= threshold
+        for metric, threshold in QUALITY_GATES.items()
+    )
+
+
+def main() -> int:
+    report = run_evaluation()
+    metrics = report["metrics"]
+    print(
+        "Offline RAG evaluation: "
+        f"{report['document_count']} documents, "
+        f"{report['case_count']} cases, "
+        f"{report['chunk_count']} chunks"
+    )
+    print(f"Hit Rate@1: {metrics['hit_rate_at_1']:.3f}")
+    print(f"Hit Rate@3: {metrics['hit_rate_at_3']:.3f}")
+    print(f"MRR: {metrics['mrr']:.3f}")
+    print(
+        "Source metadata completeness: "
+        f"{metrics['metadata_completeness']:.3f}"
+    )
+    print(f"Refusal accuracy: {metrics['refusal_accuracy']:.3f}")
+    print(f"Relevance decision accuracy: {metrics['decision_accuracy']:.3f}")
+    print(f"Stable across repeated runs: {'yes' if report['stable'] else 'no'}")
+    print(f"Quality gates: {'PASS' if report['gates_passed'] else 'FAIL'}")
+    return 0 if report["gates_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
