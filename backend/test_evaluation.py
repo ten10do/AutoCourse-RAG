@@ -1,0 +1,202 @@
+import copy
+import unittest
+from unittest import mock
+
+from backend.evaluation import run
+
+
+class OfflineEvaluationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.dataset = run.load_dataset()
+        cls.report = run.run_evaluation()
+
+    def test_dataset_has_required_coverage(self):
+        categories = [case["category"] for case in self.dataset["cases"]]
+        self.assertEqual(len(self.dataset["documents"]), 4)
+        self.assertEqual(len(self.dataset["cases"]), 12)
+        self.assertEqual(categories.count("single-document"), 8)
+        self.assertEqual(categories.count("cross-document"), 2)
+        self.assertEqual(categories.count("out-of-scope"), 2)
+
+    def test_dataset_rejects_an_invalid_question(self):
+        invalid_dataset = copy.deepcopy(self.dataset)
+        invalid_dataset["cases"][0]["question"] = None
+        with self.assertRaises(ValueError):
+            run.validate_dataset(invalid_dataset)
+
+    def test_real_light_retriever_meets_quality_gates(self):
+        metrics = self.report["metrics"]
+        self.assertEqual(self.report["page_count"], 8)
+        self.assertEqual(self.report["chunk_count"], 8)
+        self.assertGreaterEqual(metrics["hit_rate_at_3"], 0.80)
+        self.assertGreaterEqual(metrics["mrr"], 0.70)
+        self.assertEqual(metrics["metadata_completeness"], 1.00)
+        self.assertGreaterEqual(metrics["refusal_accuracy"], 0.80)
+        self.assertEqual(metrics["decision_accuracy"], 1.00)
+        self.assertTrue(self.report["gates_passed"])
+
+    def test_expected_keywords_are_present_in_retrieved_chunks(self):
+        results_by_id = {
+            result["id"]: result for result in self.report["case_results"]
+        }
+        for case in self.dataset["cases"]:
+            if not case["should_refuse"]:
+                self.assertTrue(
+                    results_by_id[case["id"]]["keyword_match"],
+                    msg=f"Missing expected keyword for {case['id']}",
+                )
+
+    def test_cross_document_cases_keep_sources_distinct(self):
+        results_by_id = {
+            result["id"]: result for result in self.report["case_results"]
+        }
+        cross_document_cases = [
+            case
+            for case in self.dataset["cases"]
+            if case["category"] == "cross-document"
+        ]
+        for case in cross_document_cases:
+            actual_sources = {
+                item["source"]
+                for item in results_by_id[case["id"]]["results"][:3]
+            }
+            self.assertTrue(set(case["expected_sources"]).issubset(actual_sources))
+
+    def test_out_of_scope_questions_are_refused(self):
+        results_by_id = {
+            result["id"]: result for result in self.report["case_results"]
+        }
+        for case in self.dataset["cases"]:
+            if case["should_refuse"]:
+                self.assertTrue(results_by_id[case["id"]]["actual_refuse"])
+
+    def test_repeated_runs_are_stable(self):
+        self.assertTrue(self.report["stable"])
+
+    def test_metric_math(self):
+        cases = [
+            {
+                "id": "first",
+                "expected_sources": ["a.pdf"],
+                "should_refuse": False,
+            },
+            {
+                "id": "second",
+                "expected_sources": ["b.pdf"],
+                "should_refuse": False,
+            },
+            {
+                "id": "refuse",
+                "expected_sources": [],
+                "should_refuse": True,
+            },
+        ]
+        complete = lambda source: {
+            "source": source,
+            "page": 0,
+            "content": "content",
+            "score": 0.2,
+        }
+        results = [
+            {
+                "id": "first",
+                "actual_refuse": False,
+                "results": [complete("a.pdf")],
+            },
+            {
+                "id": "second",
+                "actual_refuse": False,
+                "results": [complete("x.pdf"), complete("b.pdf")],
+            },
+            {
+                "id": "refuse",
+                "actual_refuse": True,
+                "results": [complete("x.pdf")],
+            },
+        ]
+        metrics = run.calculate_metrics(cases, results)
+        self.assertEqual(metrics["hit_rate_at_1"], 0.5)
+        self.assertEqual(metrics["hit_rate_at_3"], 1.0)
+        self.assertEqual(metrics["mrr"], 0.75)
+        self.assertEqual(metrics["metadata_completeness"], 1.0)
+        self.assertEqual(metrics["refusal_accuracy"], 1.0)
+        self.assertEqual(metrics["decision_accuracy"], 1.0)
+
+    def test_metadata_completeness_detects_missing_fields(self):
+        cases = [
+            {
+                "id": "case",
+                "expected_sources": ["expected.pdf"],
+                "should_refuse": False,
+            }
+        ]
+        results = [
+            {
+                "id": "case",
+                "actual_refuse": False,
+                "results": [
+                    {
+                        "source": "expected.pdf",
+                        "page": 0,
+                        "content": "valid",
+                        "score": 0.1,
+                    },
+                    {
+                        "source": "",
+                        "page": None,
+                        "content": "",
+                        "score": float("nan"),
+                    },
+                ],
+            }
+        ]
+        metrics = run.calculate_metrics(cases, results)
+        self.assertEqual(metrics["metadata_completeness"], 0.5)
+
+    def test_empty_knowledge_base_and_empty_question_fail_cleanly(self):
+        light_rag_core = run._load_light_rag_core()
+        previous_state = (
+            light_rag_core._documents,
+            light_rag_core._vectorizer,
+            light_rag_core._tfidf_matrix,
+        )
+        try:
+            light_rag_core._documents = []
+            light_rag_core._vectorizer = None
+            light_rag_core._tfidf_matrix = None
+            with self.assertRaises(ValueError):
+                light_rag_core.retrieve_docs("feedback")
+        finally:
+            (
+                light_rag_core._documents,
+                light_rag_core._vectorizer,
+                light_rag_core._tfidf_matrix,
+            ) = previous_state
+
+        with run.offline_knowledge_base(self.dataset) as (light_rag_core, _, _):
+            with self.assertRaises(ValueError):
+                light_rag_core.retrieve_docs("   ")
+
+    def test_cli_returns_nonzero_when_a_gate_fails(self):
+        failed_report = {
+            "document_count": 4,
+            "case_count": 12,
+            "chunk_count": 8,
+            "stable": True,
+            "gates_passed": False,
+            "metrics": {
+                "hit_rate_at_1": 0.0,
+                "hit_rate_at_3": 0.0,
+                "mrr": 0.0,
+                "metadata_completeness": 1.0,
+                "refusal_accuracy": 1.0,
+                "decision_accuracy": 1.0,
+            },
+        }
+        with mock.patch.object(run, "run_evaluation", return_value=failed_report):
+            self.assertEqual(run.main(), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
