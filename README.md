@@ -9,11 +9,13 @@
 ## 在线体验
 
 - React 前端（Netlify）：[https://autocourse-rag.netlify.app](https://autocourse-rag.netlify.app/)
+- FastAPI 后端（Render）：[https://autocourse-rag-backend.onrender.com](https://autocourse-rag-backend.onrender.com/)
 - FastAPI 健康检查（Render）：[https://autocourse-rag-backend.onrender.com/health](https://autocourse-rag-backend.onrender.com/health)
+- Swagger API 文档：[https://autocourse-rag-backend.onrender.com/docs](https://autocourse-rag-backend.onrender.com/docs)
 
 > 当前线上服务为免费演示版。Render Free 实例可能休眠，首次访问或首次请求需要等待服务唤醒。
 
-## 部署架构
+## 在线部署
 
 - React + Vite 前端部署在 Netlify，通过 `VITE_API_BASE_URL` 连接 Render 后端。
 - FastAPI 后端部署在 Render，通过 RESTful API 提供 PDF 上传、RAG 问答、学习辅助和知识库重置能力。
@@ -49,11 +51,11 @@ flowchart LR
 | 后端 | Python、FastAPI、Uvicorn、Pydantic、CORS |
 | RAG 框架 | LangChain、LangChain Community、full / light 双模式 |
 | 文档处理 | PyPDF、RecursiveCharacterTextSplitter |
-| 检索与向量化 | TF-IDF、Scikit-learn、HuggingFace Embeddings、Sentence Transformers |
+| 检索与向量化 | TF-IDF、scikit-learn、HuggingFace Embeddings、Sentence Transformers |
 | 知识库存储 | 轻量内存知识库、Chroma |
 | 大模型服务 | Groq API、DeepSeek API、OpenAI-compatible API |
-| 部署 | Netlify、Render Free Web Service |
-| 测试 | unittest、FastAPI TestClient、Vitest、Testing Library |
+| 测试与评测 | pytest、unittest、FastAPI TestClient、Vitest、Testing Library、离线 RAG 评测 |
+| CI/CD 与部署 | GitHub Actions、Netlify、Render Free Web Service |
 
 ## 系统架构
 
@@ -73,29 +75,41 @@ flowchart LR
     R --> F
 ```
 
-本地完整版处理链路：
+## RAG 工作流程
+
+系统在两种运行模式下共用同一套 API、来源结构和拒答流程：
 
 ```text
 多 PDF 上传
   → PDF 文本解析
   → chunk 切分
-  → HuggingFace Embedding
-  → Chroma 持久化
-  → similarity_search_with_score
+  → 根据 RAG_MODE 构建 full 或 light 知识库
+  → 检索与排序
   → 距离阈值判断
-  → 大模型生成回答
+  → 相关时调用所选模型生成回答
+  → 不相关时直接拒答，不调用模型
   → 来源文件、页码、距离分数和参考片段展示
 ```
 
-线上轻量版保留相同的上传、问答、拒答和来源追溯接口，将 Embedding + Chroma 检索替换为 TF-IDF + 余弦相似度检索，以适配 Render Free 的内存限制。
+课程总结、知识点提取和复习题生成同样只使用当前知识库中的代表性片段作为上下文。
+
+## full / light 双模式
+
+| 模式 | 检索实现 | 知识库存储 | 适用环境 |
+| --- | --- | --- | --- |
+| `full` | HuggingFace Embeddings + Chroma 向量语义检索 | `backend/vector_db/` 持久化目录 | 本地资源较充足、需要完整语义检索的环境 |
+| `light` | TF-IDF + scikit-learn 余弦相似度检索 | 进程内存 | Render 免费实例等低内存环境 |
+
+`light` 是完整的低内存运行模式，不是简化演示：它保留多 PDF 知识库、RAG 问答、来源追溯、相关性拒答和学习辅助功能。后端默认使用 `light`；设置 `RAG_MODE=full` 后切换到 Chroma 与 HuggingFace Embeddings。
 
 ## 核心功能
 
 - 支持一次上传多份 PDF，并统一构建课程知识库。
-- 对每个文档执行文本解析、chunk 切分和本地 Embedding 向量化。
-- 使用 Chroma 持久化存储向量，并通过 `similarity_search_with_score` 完成语义检索。
+- 对每份文档执行文本解析和 chunk 切分，并根据运行模式构建 Chroma 向量库或 TF-IDF 内存知识库。
+- `full` 模式使用 Chroma 持久化存储向量，并通过 `similarity_search_with_score` 完成语义检索。
+- `light` 模式使用 TF-IDF 与余弦相似度完成低内存检索。
 - 返回来源文件、页码、距离分数和参考片段，提供回答追溯能力。
-- 根据 Chroma 距离值执行阈值判断，相关性不足时不调用大模型并直接拒答。
+- 根据当前检索器的距离值执行阈值判断，相关性不足时不调用大模型并直接拒答。
 - 支持 Groq / DeepSeek 双模型切换，复用统一的大模型调用封装。
 - 基于当前知识库生成课程总结、核心知识点和复习题。
 - 支持清空 PDF 文件和向量库，并使用新资料重新构建知识库。
@@ -114,7 +128,73 @@ flowchart LR
 - 在知识库清空或重建后同步刷新状态，并清除旧知识库对应的页面结果。
 - 提供桌面双栏、平板和移动端单栏布局，无需引入复杂 UI 框架。
 
-## 后端 API
+## RAG 评测与自动回归
+
+项目内置完全离线、结果确定的轻量 RAG 回归评测。评测器使用固定的自编自动控制课程资料，仅替换 PDF 文本读取边界，并直接复用生产代码中的 `build_knowledge_base`、`retrieve_docs` 和 `has_relevant_docs`，因此实际覆盖文本分块、TF-IDF 建库、检索排序与相关性拒答逻辑。整个过程不依赖网络、DeepSeek、Groq 或其他外部模型服务。
+
+评测数据包括：
+
+- 4 份课程测试资料，共 8 页、8 个检索 chunk。
+- 12 个评测问题：8 个单文档问题、2 个跨文档问题、2 个资料外拒答问题。
+- 每个问题均定义预期来源、预期关键词和是否应拒答。
+
+运行评测：
+
+```powershell
+.\venv\Scripts\python.exe -m backend.evaluation.run
+```
+
+当前基线：
+
+| 指标 | 实际结果 | 质量门槛 |
+| --- | ---: | ---: |
+| Hit Rate@1 | `1.000` | 报告指标 |
+| Hit Rate@3 | `1.000` | `>= 0.80` |
+| MRR | `1.000` | `>= 0.70` |
+| 来源元数据完整率 | `1.000` | `>= 1.00` |
+| 拒答准确率 | `1.000` | `>= 0.80` |
+
+相同数据集会重复运行并比较来源、页码和距离排序；当前稳定性检查通过，最终质量门槛结果为 `PASS`。任何受门槛约束的指标未达标或重复运行结果不稳定时，评测命令都会返回非零退出码。
+
+## 自动化测试与 GitHub Actions
+
+当前自动回归结果：
+
+- 后端：`23 passed`，另有 5 个子测试通过。
+- 前端：3 个测试文件、`4 passed`。
+- Vite 生产构建：通过。
+
+本地验证命令：
+
+```powershell
+# 项目根目录
+.\venv\Scripts\python.exe -m compileall -q backend
+.\venv\Scripts\python.exe -m pytest backend -q
+.\venv\Scripts\python.exe -m backend.evaluation.run
+
+# 前端目录
+cd frontend
+npm.cmd run test
+npm.cmd run build
+```
+
+GitHub Actions 在以下场景触发：
+
+- push 到 `main`；
+- 创建或更新面向 `main` 的 Pull Request；
+- 手动运行 `workflow_dispatch`。
+
+CI 使用并行的 `Backend Tests and RAG Evaluation` 与 `Frontend Tests and Build` 任务，共同覆盖：
+
+1. Python 语法检查；
+2. pytest 后端回归测试；
+3. 离线 RAG 评测；
+4. 前端单元测试；
+5. Vite 生产构建。
+
+前端任务先通过 `npm ci` 按锁文件安装依赖，生产构建使用公开的 Render 后端地址。
+
+## API 接口
 
 FastAPI 提供以下接口，默认服务地址为 `http://localhost:8000`，交互式接口文档位于 `/docs`。
 
@@ -149,16 +229,25 @@ FastAPI 提供以下接口，默认服务地址为 `http://localhost:8000`，交
 
 ```text
 AutoCourse-RAG/
+├── .github/
+│   └── workflows/
+│       └── ci.yml                  # 后端、评测与前端 CI
 ├── backend/
 │   ├── __init__.py
-│   ├── main.py                 # FastAPI 应用、请求模型和 REST API
-│   ├── rag_core.py             # PDF 处理、向量库、检索与拒答逻辑
-│   ├── light_rag_core.py       # Render Free 使用的 TF-IDF 轻量检索
-│   ├── llm_client.py           # Groq / DeepSeek 统一调用封装
-│   ├── requirements.txt        # Render 轻量版依赖
-│   ├── requirements-full.txt   # 本地完整版附加依赖
-│   ├── runtime.txt             # Render Python 运行版本
-│   └── test_main.py            # FastAPI 接口测试
+│   ├── evaluation/
+│   │   ├── fixtures/
+│   │   │   └── dataset.json        # 固定离线评测资料与问题
+│   │   └── run.py                  # 评测指标、门槛与命令入口
+│   ├── main.py                     # FastAPI 应用、请求模型和 REST API
+│   ├── rag_core.py                 # full 模式 Chroma 检索
+│   ├── light_rag_core.py           # light 模式 TF-IDF 检索
+│   ├── llm_client.py               # Groq / DeepSeek 统一调用封装
+│   ├── test_main.py                # FastAPI 接口测试
+│   ├── test_light_rag_core.py      # light 检索回归测试
+│   ├── test_evaluation.py          # 离线评测与质量门槛测试
+│   ├── requirements.txt            # 轻量模式依赖
+│   ├── requirements-full.txt       # full 模式附加依赖
+│   └── runtime.txt                 # Render Python 运行版本
 ├── frontend/
 │   ├── src/
 │   │   ├── components/
@@ -166,20 +255,23 @@ AutoCourse-RAG/
 │   │   │   ├── UploadPanel.jsx
 │   │   │   ├── ChatPanel.jsx
 │   │   │   ├── SourceCard.jsx
+│   │   │   ├── SourceCard.test.jsx
 │   │   │   └── StudyTools.jsx
-│   │   ├── api.js              # Axios 接口封装
-│   │   ├── App.jsx             # 前端状态管理与页面组合
-│   │   ├── main.jsx            # React 入口
-│   │   └── styles.css          # 原生 CSS 与响应式样式
-│   ├── netlify.toml             # Netlify 构建与发布目录配置
+│   │   ├── api.js                  # Axios 接口封装
+│   │   ├── api.test.js
+│   │   ├── App.jsx                 # 前端状态管理与页面组合
+│   │   ├── App.test.jsx
+│   │   ├── main.jsx                # React 入口
+│   │   └── styles.css              # 原生 CSS 与响应式样式
+│   ├── netlify.toml                # Netlify 构建与发布目录配置
 │   ├── package.json
-│   └── vite.config.js          # Vite 配置与开发代理
-├── app.py                      # 保留的 Streamlit 版本
-├── rag_core.py                 # Streamlit 版本 RAG 核心模块
-├── llm_client.py               # Streamlit 版本模型调用模块
-├── test_rag_core.py            # RAG 核心测试
-├── requirements.txt            # Streamlit 版本依赖
-├── screenshots/                # README 功能截图
+│   └── vite.config.js              # Vite 配置与开发代理
+├── app.py                          # 保留的 Streamlit 版本
+├── rag_core.py                     # Streamlit 版本 RAG 核心模块
+├── llm_client.py                   # Streamlit 版本模型调用模块
+├── test_rag_core.py                # Streamlit RAG 核心测试
+├── requirements.txt                # Streamlit 版本依赖
+├── screenshots/                    # README 功能截图
 ├── .gitignore
 └── README.md
 ```
@@ -198,10 +290,10 @@ frontend/dist/
 后端环境变量：
 
 ```env
-GROQ_API_KEY=你的Groq密钥
-DEEPSEEK_API_KEY=你的DeepSeek密钥
+GROQ_API_KEY=
+DEEPSEEK_API_KEY=
 FRONTEND_ORIGIN=http://localhost:5173
-RAG_MODE=full
+RAG_MODE=light
 ```
 
 `RAG_MODE` 可设置为：
@@ -209,12 +301,12 @@ RAG_MODE=full
 - `full`：本地完整版，使用 Chroma + HuggingFace Embeddings。
 - `light`：低内存版本，使用 TF-IDF 检索，适合 Render Free 线上演示。
 
-`FRONTEND_ORIGIN` 用于配置 FastAPI CORS 允许的前端来源。不要在代码中写死密钥，也不要将 `.env` 提交到 GitHub。
+`FRONTEND_ORIGIN` 用于配置 FastAPI CORS 允许的前端来源。需要调用相应模型时，再在后端运行环境中配置对应服务的密钥。
 
 前端环境变量：
 
 ```env
-VITE_API_BASE_URL=https://your-api.example.com
+VITE_API_BASE_URL=http://localhost:8000
 ```
 
 本地未配置时，开发环境默认连接 `http://localhost:8000`。Netlify 生产环境通过站点环境变量连接 Render 后端。前端只保存公开的 API 服务地址，不配置 DeepSeek 或 Groq API Key。
@@ -223,20 +315,27 @@ VITE_API_BASE_URL=https://your-api.example.com
 
 建议使用 Python 虚拟环境：
 
-```bash
-python -m venv venv
+```powershell
+py -3.11 -m venv venv
 ```
 
-安装 FastAPI 后端依赖：
+安装默认 `light` 模式依赖：
 
-```bash
-pip install -r backend/requirements.txt
+```powershell
+.\venv\Scripts\python.exe -m pip install -r backend\requirements.txt
 ```
 
-启动后端：
+本地需要使用 `full` 模式时，再安装完整依赖并设置运行模式：
 
-```bash
-python -m uvicorn backend.main:app --reload --port 8000
+```powershell
+.\venv\Scripts\python.exe -m pip install -r backend\requirements-full.txt
+$env:RAG_MODE="full"
+```
+
+从项目根目录启动后端：
+
+```powershell
+.\venv\Scripts\python.exe -m uvicorn backend.main:app --reload --port 8000
 ```
 
 启动后可访问：
@@ -248,24 +347,24 @@ python -m uvicorn backend.main:app --reload --port 8000
 
 安装 Node.js 依赖：
 
-```bash
+```powershell
 cd frontend
-npm install
+npm.cmd ci
 ```
 
 启动 React 开发服务器：
 
-```bash
-npm run dev
+```powershell
+npm.cmd run dev
 ```
 
 浏览器访问 `http://localhost:5173`。生产构建命令：
 
-```bash
-npm run build
+```powershell
+npm.cmd run build
 ```
 
-## 功能截图
+## 项目截图
 
 以下截图基于 React + FastAPI 版本和 3 份自动控制课程测试资料生成，重点展示 PDF 上传、RAG 问答、来源追溯、学习工具和响应式页面。
 
@@ -298,21 +397,13 @@ npm run build
 - **React 组件化开发**：按上传、问答、来源和学习辅助等职责拆分组件，通过 Props 与状态组合完整页面。
 - **原生 Web 页面实现**：使用 HTML、CSS 和 JavaScript 完成 PDF 上传、模型选择、问答工作区、来源追溯和学习工具展示，不依赖复杂 UI 框架。
 - **前后端分离**：React 通过 Axios 调用 FastAPI RESTful API，接口职责和数据模型清晰。
-- **完整 RAG 链路**：覆盖 PDF 解析、chunk 切分、Embedding、Chroma 持久化、语义检索、阈值判断和回答生成。
-- **多文档知识库**：支持多份课程资料统一向量化，并保留每个 chunk 的来源文件和页码信息。
+- **完整 RAG 链路**：覆盖 PDF 解析、chunk 切分、双模式知识库、检索排序、阈值判断和回答生成。
+- **多文档知识库**：支持多份课程资料统一建库，并保留每个 chunk 的来源文件和页码信息。
 - **可解释与低幻觉设计**：展示检索距离和参考片段，相关性不足时跳过大模型调用并直接拒答。
 - **双模型接入**：通过统一客户端封装 Groq 和 OpenAI-compatible DeepSeek API，前端可直接切换模型服务。
 - **双模式 RAG 架构**：本地 `full` 模式使用 Chroma + HuggingFace Embeddings，线上 `light` 模式使用 TF-IDF，在保持接口一致的同时适配不同运行资源。
+- **离线质量评测**：固定数据集量化检索命中率、排序质量、来源元数据和拒答准确率，并设置自动质量门槛。
+- **自动化回归**：GitHub Actions 并行执行后端测试、离线 RAG 评测、前端测试和生产构建。
 - **免费云部署适配**：React + Vite 部署到 Netlify，FastAPI 部署到 Render Free，并通过环境变量管理跨域来源、RAG 模式和服务地址。
 - **垂直场景落地**：围绕自动控制、PLC、传感器、电机控制等自动化课程资料提供问答和学习辅助能力。
 - **新旧架构并存**：保留 Streamlit 实现，同时提供 React + FastAPI 版本，展示从快速原型到前后端分离应用的演进过程。
-
-## RAG 评测与自动回归
-
-轻量模式提供完全离线、确定性的 RAG 回归评测，使用固定的自编自动控制课程资料驱动生产环境中的分块、TF-IDF 检索、排序和拒答逻辑；测试不依赖真实大模型 API。
-
-```powershell
-.\venv\Scripts\python.exe -m backend.evaluation.run
-```
-
-评测报告 Hit Rate@1、Hit Rate@3、MRR、来源元数据完整性、拒答准确率与重复运行稳定性；任一质量门槛未达到时命令返回非零退出码。GitHub Actions 会在面向 `main` 的提交和 Pull Request 中并行运行后端测试、离线评测、前端测试与构建。
