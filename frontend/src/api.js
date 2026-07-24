@@ -7,8 +7,30 @@ const apiClient = axios.create({
   timeout: 300000,
 })
 
+function formatApiDetail(detail) {
+  if (typeof detail === 'string') return detail
+  if (!Array.isArray(detail)) return ''
+
+  return detail
+    .map((item) => {
+      if (typeof item === 'string') return item
+      if (!item || typeof item !== 'object') return ''
+      const location = Array.isArray(item.loc)
+        ? item.loc.filter((part) => part !== 'body').join('.')
+        : ''
+      const message = item.msg || item.message || ''
+      return location && message ? `${location}：${message}` : message
+    })
+    .filter(Boolean)
+    .join('；')
+}
+
 export function getApiErrorMessage(error, fallback = '请求失败，请稍后重试。') {
-  return error?.response?.data?.detail || error?.message || fallback
+  return (
+    formatApiDetail(error?.response?.data?.detail) ||
+    error?.message ||
+    fallback
+  )
 }
 
 export async function getHealth() {

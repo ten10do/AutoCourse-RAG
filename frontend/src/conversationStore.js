@@ -3,6 +3,8 @@ export const SCHEMA_VERSION = 1
 export const MAX_CONVERSATIONS = 8
 export const MAX_MESSAGES_PER_CONVERSATION = 60
 export const MAX_HISTORY_MESSAGES = 40
+export const MAX_HISTORY_CONTENT_CHARS = 4000
+export const MAX_QUESTION_CONTENT_CHARS = 1000
 
 function nowIso() {
   return new Date().toISOString()

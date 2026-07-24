@@ -17,7 +17,7 @@ vi.mock('axios', () => ({
   },
 }))
 
-const { askQuestion } = await import('./api')
+const { askQuestion, getApiErrorMessage } = await import('./api')
 
 describe('API client configuration', () => {
   it('uses the local FastAPI server when no development URL is configured', () => {
@@ -46,5 +46,27 @@ describe('API client configuration', () => {
       history: [{ role: 'user', content: '什么是 PID？' }],
       context_options: { max_recent_turns: 4 },
     })
+  })
+
+  it('formats FastAPI validation detail arrays as a stable message', () => {
+    const message = getApiErrorMessage(
+      {
+        response: {
+          data: {
+            detail: [
+              {
+                loc: ['body', 'history', 0, 'content'],
+                msg: 'String should have at most 4000 characters',
+              },
+            ],
+          },
+        },
+      },
+      '请求失败',
+    )
+
+    expect(message).toBe(
+      'history.0.content：String should have at most 4000 characters',
+    )
   })
 })

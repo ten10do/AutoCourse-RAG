@@ -11,7 +11,9 @@ import {
 
 import { askQuestion, getApiErrorMessage } from '../api'
 import {
+  MAX_HISTORY_CONTENT_CHARS,
   MAX_HISTORY_MESSAGES,
+  MAX_QUESTION_CONTENT_CHARS,
   addMessage,
   clearActiveConversation,
   createConversationId,
@@ -31,7 +33,7 @@ function createMessageId() {
 function historyPayload(messages) {
   return messages.slice(-MAX_HISTORY_MESSAGES).map((message) => ({
     role: message.role,
-    content: message.content,
+    content: message.content.slice(0, MAX_HISTORY_CONTENT_CHARS),
     timestamp: message.timestamp,
     ...(message.role === 'assistant' && message.sources?.length
       ? {
@@ -117,7 +119,7 @@ export default function ChatPanel({
     setIsLoading(true)
     try {
       const payload = await askQuestion({
-        question: content,
+        question: content.slice(0, MAX_QUESTION_CONTENT_CHARS),
         modelProvider,
         topK,
         conversationId: requestState.active_conversation_id,
@@ -144,7 +146,9 @@ export default function ChatPanel({
 
   const handleSubmit = async (event) => {
     event.preventDefault()
-    const normalizedQuestion = question.trim()
+    const normalizedQuestion = question
+      .trim()
+      .slice(0, MAX_QUESTION_CONTENT_CHARS)
     if (!normalizedQuestion) {
       setError('请输入与课程资料相关的问题。')
       return
@@ -339,6 +343,7 @@ export default function ChatPanel({
           onChange={(event) => setQuestion(event.target.value)}
           placeholder="输入问题，或基于上一轮回答继续追问..."
           rows={3}
+          maxLength={MAX_QUESTION_CONTENT_CHARS}
         />
 
         <div className="composer-footer">

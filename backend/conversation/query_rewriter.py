@@ -81,16 +81,8 @@ def normalize_standalone_query(value: str, max_chars: int) -> str:
     return normalized.strip("\"'")[:max_chars].rstrip()
 
 
-def _extract_recent_user_topic(turns: list[ConversationTurn]) -> str:
-    user_turns = [
-        turn.content
-        for turn in turns
-        if turn.role == "user"
-    ]
-    if not user_turns:
-        return ""
-
-    text = user_turns[-1].strip("？?。 ")
+def _extract_topic(text: str) -> str:
+    text = text.strip("？?。 ")
     patterns = [
         r"^什么是(.+)$",
         r"^(.+?)(?:包括|包含|由)哪些(?:阶段|环节|部分|内容).*$",
@@ -118,17 +110,50 @@ def _extract_recent_user_topic(turns: list[ConversationTurn]) -> str:
     return topic[:120].strip()
 
 
+def _extract_recent_user_topic(
+    turns: list[ConversationTurn],
+    summary: str = "",
+) -> str:
+    user_turns = [
+        turn.content
+        for turn in turns
+        if turn.role == "user"
+    ]
+    detail = ""
+    if user_turns:
+        detail_match = re.search(
+            r"(积分项|积分环节|比例项|比例环节|微分项|微分环节)",
+            user_turns[-1],
+        )
+        if detail_match:
+            detail = detail_match.group(1)
+
+    topic = ""
+    for text in reversed(user_turns):
+        topic = _extract_topic(text)
+        if topic:
+            break
+
+    if not topic:
+        topic = _extract_topic(summary)
+
+    if detail and re.search(r"\bPID\b", topic, re.IGNORECASE):
+        return f"{topic}的{detail}"
+    return topic
+
+
 def deterministic_rewrite(
     current_question: str,
     recent_turns: list[ConversationTurn],
     max_chars: int = MAX_STANDALONE_QUERY_CHARS,
+    summary: str = "",
 ) -> tuple[str, str]:
     question = normalize_message_text(current_question)
     pronoun_pattern = r"(?:其中|它|其|该(?:概念|方法|过程|环节)?|上述|这个)"
     if not re.search(pronoun_pattern, question):
         return question[:max_chars], "unchanged"
 
-    topic = _extract_recent_user_topic(recent_turns)
+    topic = _extract_recent_user_topic(recent_turns, summary)
     if not topic:
         return question[:max_chars], "unresolved"
 

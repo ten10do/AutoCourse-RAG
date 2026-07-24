@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
-from .budget import estimate_context_chars, trim_to_context_budget
+from .budget import (
+    estimate_context_chars,
+    trim_to_context_budget,
+    trim_turns_to_char_budget,
+)
 from .models import (
     MAX_STANDALONE_QUERY_CHARS,
     MAX_SUMMARY_CHARS,
@@ -67,35 +71,48 @@ class ConversationContextManager:
             "",
             limited_history,
         )
-        should_compress = (
+        has_older_turns = (
             options.enable_context_compression
             and len(limited_history) > options.max_recent_turns
-            and total_raw_size > options.compression_threshold
         )
 
-        if should_compress:
+        if has_older_turns:
             older_turns = limited_history[: -options.max_recent_turns]
             retained_turns = limited_history[-options.max_recent_turns :]
             compressed_turn_count = len(older_turns)
-            try:
-                summary = normalize_summary(
-                    self._summarizer.summarize(
-                        copy.deepcopy(older_turns),
+            summary_turns, summary_limit_applied = trim_turns_to_char_budget(
+                older_turns,
+                options.max_context_chars,
+            )
+            context_limit_applied = (
+                context_limit_applied or summary_limit_applied
+            )
+            if total_raw_size > options.compression_threshold:
+                try:
+                    summary = normalize_summary(
+                        self._summarizer.summarize(
+                            copy.deepcopy(summary_turns),
+                            MAX_SUMMARY_CHARS,
+                        ),
                         MAX_SUMMARY_CHARS,
-                    ),
-                    MAX_SUMMARY_CHARS,
-                )
-            except Exception:
-                summary = ""
-            if summary:
-                compression_status = "compressed"
+                    )
+                except Exception:
+                    summary = ""
+                if summary:
+                    compression_status = "compressed"
+                else:
+                    summary = deterministic_summary(
+                        summary_turns,
+                        max_chars=MAX_SUMMARY_CHARS,
+                    )
+                    compression_status = "fallback"
+                    compression_fallback = True
             else:
                 summary = deterministic_summary(
-                    older_turns,
+                    summary_turns,
                     max_chars=MAX_SUMMARY_CHARS,
                 )
-                compression_status = "fallback"
-                compression_fallback = True
+                compression_status = "compressed"
         else:
             retained_turns = limited_history
             if not options.enable_context_compression:
@@ -116,6 +133,7 @@ class ConversationContextManager:
             standalone_query = normalized_question
             rewrite_status = "disabled"
         else:
+            rewrite_failed = False
             try:
                 rewritten = normalize_standalone_query(
                     self._query_rewriter.rewrite(
@@ -128,6 +146,9 @@ class ConversationContextManager:
                 )
             except Exception:
                 rewritten = ""
+                rewrite_failed = True
+            if not rewritten:
+                rewrite_failed = True
 
             if rewritten:
                 standalone_query = rewritten
@@ -141,8 +162,11 @@ class ConversationContextManager:
                     normalized_question,
                     retained_turns or limited_history,
                     max_chars=MAX_STANDALONE_QUERY_CHARS,
+                    summary=summary,
                 )
-                query_fallback = rewrite_status in {"fallback", "unresolved"}
+                if rewrite_failed and rewrite_status == "unchanged":
+                    rewrite_status = "fallback"
+                query_fallback = True
 
         estimated_context_size = estimate_context_chars(
             normalized_question,

@@ -221,4 +221,35 @@ describe('multi-turn ChatPanel', () => {
     resolveRequest(answerPayload('完成', '只发送一次'))
     await waitFor(() => expect(screen.getByText('完成')).toBeInTheDocument())
   })
+
+  it('bounds a long assistant answer before sending it as history', async () => {
+    const longAnswer = '长'.repeat(4500)
+    askQuestion
+      .mockResolvedValueOnce(answerPayload(longAnswer, '第一问'))
+      .mockResolvedValueOnce(answerPayload('第二轮回答', '第二问'))
+
+    render(<ChatPanel modelProvider="Groq" />)
+    await submitQuestion('第一问')
+    await screen.findByText(longAnswer)
+    await submitQuestion('第二问')
+    await screen.findByText('第二轮回答')
+
+    const assistantHistory = askQuestion.mock.calls[1][0].history.find(
+      (message) => message.role === 'assistant',
+    )
+    expect(assistantHistory.content).toHaveLength(4000)
+  })
+
+  it('limits the current question to the backend-compatible length', async () => {
+    askQuestion.mockResolvedValueOnce(answerPayload('回答', '独立问题'))
+    render(<ChatPanel modelProvider="Groq" />)
+    expect(screen.getByLabelText('课程问题')).toHaveAttribute(
+      'maxLength',
+      '1000',
+    )
+
+    await submitQuestion('问'.repeat(1100))
+    await screen.findByText('回答')
+    expect(askQuestion.mock.calls[0][0].question).toHaveLength(1000)
+  })
 })

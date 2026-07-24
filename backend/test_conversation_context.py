@@ -172,6 +172,62 @@ def test_history_count_and_context_budget_limits_are_applied():
     assert result.retained_turns[-1].content.startswith("turn-9-")
 
 
+def test_summarizer_input_is_bounded_before_the_llm_call():
+    history = [
+        turn(
+            "user" if index % 2 == 0 else "assistant",
+            f"{index:02d}-" + "x" * 3900,
+        )
+        for index in range(40)
+    ]
+    summarizer = FakeSummarizer("有界摘要")
+    manager = ConversationContextManager(
+        summarizer=summarizer,
+        query_rewriter=FakeQueryRewriter("当前问题"),
+    )
+
+    result = manager.process(
+        current_question="当前问题",
+        history=history,
+        conversation_id="conversation-summary-input-budget",
+        options=ContextOptions(),
+    )
+
+    summary_turns = summarizer.calls[0][0]
+    assert sum(len(item.content) for item in summary_turns) <= 12000
+    assert summary_turns[-1].content.startswith("33-")
+    assert result.metadata.context_limit_applied is True
+
+
+def test_max_recent_turns_is_a_hard_window_even_below_compression_threshold():
+    history = [
+        turn(
+            "user" if index % 2 == 0 else "assistant",
+            f"短消息 {index}",
+        )
+        for index in range(10)
+    ]
+    manager = ConversationContextManager(
+        summarizer=FakeSummarizer(),
+        query_rewriter=FakeQueryRewriter("完整问题"),
+    )
+
+    result = manager.process(
+        current_question="完整问题",
+        history=history,
+        conversation_id="conversation-recent-window",
+        options=ContextOptions(
+            max_recent_turns=6,
+            compression_threshold=6000,
+        ),
+    )
+
+    assert result.metadata.retained_turn_count == 6
+    assert result.metadata.compressed_turn_count == 4
+    assert result.metadata.was_compressed is True
+    assert result.metadata.summary_used is True
+
+
 def test_input_history_is_not_mutated_and_processing_is_deterministic():
     history = [
         turn("user", "  PLC   扫描周期包括哪些阶段？ \n"),
@@ -339,6 +395,48 @@ def test_unresolved_pronoun_does_not_invent_a_topic():
 
     assert result.standalone_query == "它为什么会这样？"
     assert result.metadata.query_rewrite_status == "unresolved"
+
+
+def test_rewriter_failure_for_complete_question_is_reported_as_fallback():
+    question = "PID 控制器的积分项为什么会饱和？"
+    manager = ConversationContextManager(
+        summarizer=FakeSummarizer(),
+        query_rewriter=FailingQueryRewriter(),
+    )
+    result = manager.process(
+        current_question=question,
+        history=[turn("user", "什么是 PID 控制？")],
+        conversation_id="conversation-complete-fallback",
+        options=ContextOptions(),
+    )
+
+    assert result.standalone_query == question
+    assert result.metadata.query_rewrite_status == "fallback"
+    assert result.metadata.fallback_used is True
+
+
+def test_chained_pronoun_fallback_keeps_parent_and_detail_topic():
+    manager = ConversationContextManager(
+        summarizer=FakeSummarizer(),
+        query_rewriter=FailingQueryRewriter(),
+    )
+    result = manager.process(
+        current_question="它为什么可能导致积分饱和？",
+        history=[
+            turn("user", "什么是 PID 控制？"),
+            turn("assistant", "PID 包含比例、积分和微分环节。"),
+            turn("user", "其中积分项有什么作用？"),
+            turn("assistant", "积分项会累积历史偏差。"),
+        ],
+        conversation_id="conversation-chained-fallback",
+        options=ContextOptions(),
+    )
+
+    assert result.standalone_query == (
+        "PID 控制器的积分项为什么可能导致积分饱和？"
+    )
+    assert result.metadata.query_rewrite_status == "fallback"
+    assert result.metadata.fallback_used is True
 
 
 def test_query_rewrite_can_be_disabled_and_output_is_bounded():

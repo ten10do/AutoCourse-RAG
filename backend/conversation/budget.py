@@ -7,6 +7,36 @@ ROLE_OVERHEAD_CHARS = 12
 SUMMARY_OVERHEAD_CHARS = 12
 
 
+def trim_turns_to_char_budget(
+    turns: list[ConversationTurn],
+    max_chars: int,
+) -> tuple[list[ConversationTurn], bool]:
+    bounded_turns: list[ConversationTurn] = []
+    remaining = max_chars
+    limit_applied = False
+
+    for turn in reversed(turns):
+        turn_size = len(turn.content) + ROLE_OVERHEAD_CHARS
+        if turn_size <= remaining:
+            bounded_turns.append(turn)
+            remaining -= turn_size
+            continue
+
+        if not bounded_turns and remaining > ROLE_OVERHEAD_CHARS:
+            available = remaining - ROLE_OVERHEAD_CHARS
+            bounded_turns.append(
+                turn.model_copy(
+                    update={"content": turn.content[-available:]},
+                    deep=True,
+                )
+            )
+        limit_applied = True
+        break
+
+    bounded_turns.reverse()
+    return bounded_turns, limit_applied or len(bounded_turns) < len(turns)
+
+
 def estimate_context_chars(
     current_question: str,
     summary: str,
