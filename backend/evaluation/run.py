@@ -20,6 +20,8 @@ QUALITY_GATES = {
     "metadata_completeness": 1.00,
     "refusal_accuracy": 0.80,
     "multi_turn_accuracy": 1.00,
+    "deterministic_fallback_accuracy": 1.00,
+    "lexical_boundary_accuracy": 1.00,
 }
 
 
@@ -53,6 +55,7 @@ def validate_dataset(dataset: dict) -> None:
     documents = dataset.get("documents")
     cases = dataset.get("cases")
     multi_turn_cases = dataset.get("multi_turn_cases")
+    fallback_cases = dataset.get("fallback_cases")
     if not isinstance(documents, list) or len(documents) < 4:
         raise ValueError("Evaluation dataset requires at least four documents.")
     if not isinstance(cases, list) or len(cases) < 12:
@@ -60,6 +63,10 @@ def validate_dataset(dataset: dict) -> None:
     if not isinstance(multi_turn_cases, list) or len(multi_turn_cases) < 2:
         raise ValueError(
             "Evaluation dataset requires at least two multi-turn cases."
+        )
+    if not isinstance(fallback_cases, list) or len(fallback_cases) < 20:
+        raise ValueError(
+            "Evaluation dataset requires at least twenty fallback cases."
         )
 
     sources = []
@@ -164,6 +171,61 @@ def validate_dataset(dataset: dict) -> None:
                 f"Multi-turn case {case_id} references an unknown source."
             )
 
+    fallback_ids = set()
+    required_fallback_fields = {
+        "category",
+        "history",
+        "question",
+        "expected_standalone_query",
+        "expected_status",
+        "expected_fallback_used",
+    }
+    for case in fallback_cases:
+        case_id = case.get("id")
+        if (
+            not isinstance(case_id, str)
+            or not case_id
+            or case_id in fallback_ids
+        ):
+            raise ValueError(
+                "Fallback case IDs must be non-empty and unique."
+            )
+        fallback_ids.add(case_id)
+        if not required_fallback_fields.issubset(case):
+            raise ValueError(
+                f"Fallback case {case_id} is missing a required field."
+            )
+        if case["category"] not in {
+            "lexical-boundary",
+            "deterministic-fallback",
+        }:
+            raise ValueError(
+                f"Fallback case {case_id} has an invalid category."
+            )
+        if not isinstance(case["history"], list):
+            raise ValueError(
+                f"Fallback case {case_id} has invalid history."
+            )
+        for history_turn in case["history"]:
+            ConversationTurn.model_validate(history_turn)
+        for field in ("question", "expected_standalone_query"):
+            if not isinstance(case[field], str) or not case[field].strip():
+                raise ValueError(
+                    f"Fallback case {case_id} has invalid {field}."
+                )
+        if case["expected_status"] not in {
+            "not_needed",
+            "fallback",
+            "unresolved",
+        }:
+            raise ValueError(
+                f"Fallback case {case_id} has invalid expected_status."
+            )
+        if not isinstance(case["expected_fallback_used"], bool):
+            raise ValueError(
+                f"Fallback case {case_id} has invalid fallback flag."
+            )
+
 
 def _load_light_rag_core():
     """Import the production retriever without loading environment files."""
@@ -239,10 +301,7 @@ class _FixtureSummarizer:
         return ""
 
 
-class _FixtureQueryRewriter:
-    def __init__(self, standalone_query: str):
-        self._standalone_query = standalone_query
-
+class _FailingQueryRewriter:
     def rewrite(
         self,
         current_question: str,
@@ -250,7 +309,7 @@ class _FixtureQueryRewriter:
         recent_turns: list[ConversationTurn],
         max_chars: int,
     ) -> str:
-        return self._standalone_query[:max_chars]
+        raise RuntimeError("offline deterministic fallback")
 
 
 def evaluate_multi_turn_cases(
@@ -262,9 +321,7 @@ def evaluate_multi_turn_cases(
     for case in cases:
         manager = ConversationContextManager(
             summarizer=_FixtureSummarizer(),
-            query_rewriter=_FixtureQueryRewriter(
-                case["standalone_query"]
-            ),
+            query_rewriter=_FailingQueryRewriter(),
         )
         context = manager.process(
             current_question=case["follow_up"],
@@ -298,6 +355,10 @@ def evaluate_multi_turn_cases(
         result = {
             "id": case["id"],
             "standalone_query": context.standalone_query,
+            "query_rewrite_status": (
+                context.metadata.query_rewrite_status
+            ),
+            "fallback_used": context.metadata.fallback_used,
             "query_terms_present": all(
                 term.lower() in context.standalone_query.lower()
                 for term in case["required_query_terms"]
@@ -326,6 +387,45 @@ def evaluate_multi_turn_cases(
             and result["keyword_match"]
             and result["metadata_complete"]
             and not result["actual_refuse"]
+            and result["query_rewrite_status"] == "fallback"
+            and result["fallback_used"]
+        )
+        results.append(result)
+    return results
+
+
+def evaluate_fallback_cases(cases: list[dict]) -> list[dict]:
+    results = []
+    for case in cases:
+        manager = ConversationContextManager(
+            summarizer=_FixtureSummarizer(),
+            query_rewriter=_FailingQueryRewriter(),
+        )
+        context = manager.process(
+            current_question=case["question"],
+            history=[
+                ConversationTurn.model_validate(turn)
+                for turn in case["history"]
+            ],
+            conversation_id=f"evaluation-{case['id']}",
+            options=ContextOptions(),
+        )
+        result = {
+            "id": case["id"],
+            "category": case["category"],
+            "standalone_query": context.standalone_query,
+            "query_rewrite_status": (
+                context.metadata.query_rewrite_status
+            ),
+            "fallback_used": context.metadata.fallback_used,
+        }
+        result["passed"] = bool(
+            result["standalone_query"]
+            == case["expected_standalone_query"]
+            and result["query_rewrite_status"]
+            == case["expected_status"]
+            and result["fallback_used"]
+            == case["expected_fallback_used"]
         )
         results.append(result)
     return results
@@ -424,6 +524,9 @@ def evaluate_once(dataset: dict, top_k: int = 3) -> dict:
             dataset["multi_turn_cases"],
             top_k,
         )
+    fallback_results = evaluate_fallback_cases(
+        dataset["fallback_cases"]
+    )
 
     metrics = calculate_metrics(dataset["cases"], case_results)
     metrics["multi_turn_accuracy"] = (
@@ -432,14 +535,41 @@ def evaluate_once(dataset: dict, top_k: int = 3) -> dict:
         if multi_turn_results
         else 0.0
     )
+    deterministic_results = multi_turn_results + [
+        result
+        for result, case in zip(
+            fallback_results,
+            dataset["fallback_cases"],
+        )
+        if case["expected_fallback_used"]
+    ]
+    metrics["deterministic_fallback_accuracy"] = (
+        sum(result["passed"] for result in deterministic_results)
+        / len(deterministic_results)
+        if deterministic_results
+        else 0.0
+    )
+    lexical_results = [
+        result
+        for result in fallback_results
+        if result["category"] == "lexical-boundary"
+    ]
+    metrics["lexical_boundary_accuracy"] = (
+        sum(result["passed"] for result in lexical_results)
+        / len(lexical_results)
+        if lexical_results
+        else 0.0
+    )
     return {
         "document_count": len(dataset["documents"]),
         "case_count": len(dataset["cases"]),
         "multi_turn_case_count": len(dataset["multi_turn_cases"]),
+        "fallback_case_count": len(dataset["fallback_cases"]),
         "page_count": page_count,
         "chunk_count": chunk_count,
         "case_results": case_results,
         "multi_turn_results": multi_turn_results,
+        "fallback_results": fallback_results,
         "metrics": metrics,
     }
 
@@ -476,7 +606,20 @@ def _stability_signature(report: dict) -> tuple:
         )
         for case_result in report["multi_turn_results"]
     )
-    return single_turn_signature, multi_turn_signature
+    fallback_signature = tuple(
+        (
+            case_result["id"],
+            case_result["standalone_query"],
+            case_result["query_rewrite_status"],
+            case_result["fallback_used"],
+        )
+        for case_result in report["fallback_results"]
+    )
+    return (
+        single_turn_signature,
+        multi_turn_signature,
+        fallback_signature,
+    )
 
 
 def run_evaluation(
@@ -512,6 +655,7 @@ def main() -> int:
         f"{report['document_count']} documents, "
         f"{report['case_count']} cases, "
         f"{report.get('multi_turn_case_count', 0)} multi-turn cases, "
+        f"{report.get('fallback_case_count', 0)} fallback cases, "
         f"{report['chunk_count']} chunks"
     )
     print(f"Hit Rate@1: {metrics['hit_rate_at_1']:.3f}")
@@ -526,6 +670,14 @@ def main() -> int:
     print(
         "Multi-turn follow-up accuracy: "
         f"{metrics.get('multi_turn_accuracy', 0.0):.3f}"
+    )
+    print(
+        "Deterministic fallback accuracy: "
+        f"{metrics.get('deterministic_fallback_accuracy', 0.0):.3f}"
+    )
+    print(
+        "Lexical boundary accuracy: "
+        f"{metrics.get('lexical_boundary_accuracy', 0.0):.3f}"
     )
     print(f"Stable across repeated runs: {'yes' if report['stable'] else 'no'}")
     print(f"Quality gates: {'PASS' if report['gates_passed'] else 'FAIL'}")

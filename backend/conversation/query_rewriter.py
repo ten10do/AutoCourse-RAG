@@ -22,6 +22,15 @@ CONTEXT_REFERENCE_PATTERN = (
 QI_DIRECT_SUFFIX_PATTERN = (
     r"^(?:对|在|与|由|会|将|可|能|是否|能否|如何|为何|为什么)"
 )
+QUESTION_SUBJECT_PATTERN = (
+    r"^(?:其中|该|这个)?(.+?)(?="
+    r"有什么|有何|有哪些|是什么|为什么|为何|如何|怎么|会不会|"
+    r"是否|能否|可以|能够|包括哪些|包含哪些|由哪些|对|的作用)"
+)
+REFERENCE_SUBJECT_PREFIXES = ("其中", "该", "这个")
+GENERIC_SUBJECT_SUFFIX_PATTERN = (
+    r"(?:环节|项目|项|模块|部分|阶段|过程|方法|参数|回路)$"
+)
 
 
 class QueryRewriter(Protocol):
@@ -95,10 +104,24 @@ def normalize_standalone_query(value: str, max_chars: int) -> str:
     return normalized.strip("\"'")[:max_chars].rstrip()
 
 
+def _normalize_topic_label(value: str) -> str:
+    topic = normalize_message_text(value).strip("？?。 ")
+    topic = re.sub(
+        r"PLC\s*的\s*扫描周期",
+        "PLC 扫描周期",
+        topic,
+        flags=re.I,
+    )
+    if re.fullmatch(r"PID\s*控制", topic, flags=re.I):
+        topic = "PID 控制器"
+    return topic[:120].strip()
+
+
 def _extract_topic(text: str) -> str:
     text = text.strip("？?。 ")
     patterns = [
         r"^什么是(.+)$",
+        r"^(.+?)是什么$",
         r"^(.+?)(?:包括|包含|由)哪些(?:阶段|环节|部分|内容).*$",
         r"^请(?:介绍|说明|解释)(.+)$",
     ]
@@ -149,51 +172,126 @@ def _extract_topic(text: str) -> str:
         elif plc_match:
             topic = plc_match.group(0)
 
-    topic = normalize_message_text(topic)
-    topic = re.sub(r"PLC\s*的\s*扫描周期", "PLC 扫描周期", topic, flags=re.I)
-    if re.fullmatch(r"PID\s*控制", topic, flags=re.I):
-        topic = "PID 控制器"
-    return topic[:120].strip()
+    return _normalize_topic_label(topic)
 
 
 def _extract_followup_subject(text: str) -> str:
     normalized = normalize_message_text(text).strip("？?。 ")
-    match = re.match(
-        r"^(?:其中|该|这个)(.+?)(?="
-        r"有什么|有何|为什么|为何|如何|怎么|会不会|是否|能否|"
-        r"可以|能够|对|的作用)",
-        normalized,
-    )
+    match = re.match(QUESTION_SUBJECT_PATTERN, normalized)
     if not match:
         return ""
-    return normalize_message_text(match.group(1)).strip("的 ")[:120]
+    subject = _normalize_topic_label(match.group(1)).strip("的 ")
+    if not subject or re.search(CONTEXT_REFERENCE_PATTERN, subject):
+        return ""
+    return subject
+
+
+def _has_reference_subject_prefix(text: str) -> bool:
+    normalized = normalize_message_text(text)
+    return normalized.startswith(REFERENCE_SUBJECT_PREFIXES)
+
+
+def _is_subject_anchored(subject: str, assistant_text: str) -> bool:
+    normalized_answer = normalize_message_text(assistant_text)
+    if subject in normalized_answer:
+        return True
+    base_subject = re.sub(GENERIC_SUBJECT_SUFFIX_PATTERN, "", subject)
+    return len(base_subject) >= 2 and base_subject in normalized_answer
+
+
+def _append_unique(values: list[str], value: str) -> None:
+    if value and value not in values:
+        values.append(value)
+
+
+def _extract_summary_topics(summary: str) -> list[str]:
+    if not summary:
+        return []
+
+    topics: list[str] = []
+    summarized_questions = re.search(
+        r"(?:用户问题|问题)\s*[:：]\s*(.+)",
+        summary,
+    )
+    if summarized_questions:
+        for question in re.split(r"[；\n]", summarized_questions.group(1)):
+            normalized = question.strip("？?。 ")
+            if _has_reference_subject_prefix(normalized):
+                continue
+            _append_unique(
+                topics,
+                _extract_topic(normalized)
+                or _extract_followup_subject(normalized),
+            )
+
+    if not topics:
+        _append_unique(topics, _extract_topic(summary))
+    return topics
 
 
 def _extract_recent_user_topic(
     turns: list[ConversationTurn],
     summary: str = "",
 ) -> str:
-    user_turns = [
-        turn.content
-        for turn in turns
-        if turn.role == "user"
-    ]
-    detail = (
-        _extract_followup_subject(user_turns[-1])
-        if user_turns
-        else ""
-    )
+    summary_topics = _extract_summary_topics(summary)
+    root_topics = list(summary_topics)
+    current_root = root_topics[0] if len(root_topics) == 1 else ""
+    detail = ""
+    recent_root_seen = False
 
-    topic = ""
-    for text in reversed(user_turns):
-        topic = _extract_topic(text)
-        if topic:
-            break
+    for index, turn in enumerate(turns):
+        if turn.role != "user":
+            continue
 
-    if not topic:
-        topic = _extract_topic(summary)
+        text = turn.content
+        explicit_topic = _extract_topic(text)
+        subject = _extract_followup_subject(text)
+        previous_assistant = (
+            turns[index - 1].content
+            if index > 0 and turns[index - 1].role == "assistant"
+            else ""
+        )
 
-    if topic and detail and detail not in topic:
+        if explicit_topic:
+            _append_unique(root_topics, explicit_topic)
+            current_root = explicit_topic
+            detail = ""
+            recent_root_seen = True
+            continue
+
+        if not subject:
+            continue
+
+        has_reference_prefix = _has_reference_subject_prefix(text)
+        anchored_to_root = (
+            len(root_topics) == 1
+            and (
+                has_reference_prefix
+                or _is_subject_anchored(subject, previous_assistant)
+                or (
+                    bool(summary_topics)
+                    and not recent_root_seen
+                )
+            )
+        )
+        if anchored_to_root:
+            current_root = root_topics[0]
+            if subject != current_root:
+                detail = subject
+            continue
+
+        if has_reference_prefix:
+            continue
+
+        _append_unique(root_topics, subject)
+        current_root = subject
+        detail = ""
+        recent_root_seen = True
+
+    if len(root_topics) != 1:
+        return ""
+    topic = root_topics[0]
+    if current_root == topic and detail and detail not in topic:
         return f"{topic}的{detail}"
     return topic
 

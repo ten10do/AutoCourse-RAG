@@ -470,8 +470,14 @@ def test_qi_pronoun_fallback_respects_word_boundaries_and_possessives():
 
     for question in (
         "其他控制方法有哪些？",
-        "其次需要考虑什么？",
-        "其实问题已经完整。",
+        "其他的控制方式有哪些？",
+        "其次还需要考虑哪些因素？",
+        "其实这种方法有什么限制？",
+        "其余参数如何设置？",
+        "其间发生了哪些状态变化？",
+        "其他控制方法与 PID 控制相比有哪些区别？",
+        "其他阿尔法结构有哪些？",
+        "目前常用的控制方法有哪些？",
         "其它方法是否适用？",
         "反馈因素尤其重要吗？",
     ):
@@ -487,6 +493,8 @@ def test_qi_pronoun_fallback_respects_word_boundaries_and_possessives():
 
     expected_rewrites = {
         "其作用是什么？": "PID 控制器的作用是什么？",
+        "其影响有哪些？": "PID 控制器的影响有哪些？",
+        "其原理是什么？": "PID 控制器的原理是什么？",
         "请说明其参数如何影响响应。": "请说明PID 控制器的参数如何影响响应。",
         "其对系统稳定性有什么影响？": "PID 控制器对系统稳定性有什么影响？",
     }
@@ -499,6 +507,77 @@ def test_qi_pronoun_fallback_respects_word_boundaries_and_possessives():
         )
         assert result.standalone_query == expected
         assert result.metadata.query_rewrite_status == "fallback"
+        assert result.metadata.fallback_used is True
+
+
+def test_fallback_recovers_explicit_recent_subtopic_without_reference_prefix():
+    manager = ConversationContextManager(
+        summarizer=FakeSummarizer(),
+        query_rewriter=FailingQueryRewriter(),
+    )
+    history = [
+        turn("user", "闭环控制是什么？"),
+        turn("assistant", "闭环控制通过反馈环节修正偏差。"),
+        turn("user", "反馈环节有什么作用？"),
+        turn("assistant", "反馈环节用于比较输出和设定值。"),
+    ]
+    expected = "闭环控制的反馈环节为什么影响稳定性？"
+
+    recent = manager.process(
+        current_question="它为什么影响稳定性？",
+        history=history,
+        conversation_id="conversation-explicit-subtopic",
+        options=ContextOptions(),
+    )
+    compressed = manager.process(
+        current_question="它为什么影响稳定性？",
+        history=history,
+        conversation_id="conversation-explicit-subtopic-compressed",
+        options=ContextOptions(
+            max_recent_turns=2,
+            compression_threshold=6000,
+        ),
+    )
+
+    for result in (recent, compressed):
+        assert result.standalone_query == expected
+        assert result.metadata.query_rewrite_status == "fallback"
+        assert result.metadata.fallback_used is True
+
+
+def test_fallback_keeps_parallel_multi_topic_history_unresolved():
+    manager = ConversationContextManager(
+        summarizer=FakeSummarizer(),
+        query_rewriter=FailingQueryRewriter(),
+    )
+    history = [
+        turn("user", "PID 控制有什么特点？"),
+        turn("assistant", "PID 控制结合比例、积分和微分作用。"),
+        turn("user", "PLC 扫描周期包括哪些阶段？"),
+        turn("assistant", "包括输入采样、程序执行和输出刷新。"),
+        turn("user", "变频器有哪些作用？"),
+        turn("assistant", "变频器可以调节电机转速。"),
+    ]
+
+    recent = manager.process(
+        current_question="其作用是什么？",
+        history=history,
+        conversation_id="conversation-ambiguous-topics",
+        options=ContextOptions(),
+    )
+    compressed = manager.process(
+        current_question="其作用是什么？",
+        history=history,
+        conversation_id="conversation-ambiguous-topics-compressed",
+        options=ContextOptions(
+            max_recent_turns=2,
+            compression_threshold=6000,
+        ),
+    )
+
+    for result in (recent, compressed):
+        assert result.standalone_query == "其作用是什么？"
+        assert result.metadata.query_rewrite_status == "unresolved"
         assert result.metadata.fallback_used is True
 
 
