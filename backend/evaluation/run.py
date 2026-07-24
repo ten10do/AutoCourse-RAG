@@ -9,6 +9,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
+from backend.conversation.context_manager import ConversationContextManager
+from backend.conversation.models import ContextOptions, ConversationTurn
+
 
 DATASET_PATH = Path(__file__).resolve().parent / "fixtures" / "dataset.json"
 QUALITY_GATES = {
@@ -16,6 +19,7 @@ QUALITY_GATES = {
     "mrr": 0.70,
     "metadata_completeness": 1.00,
     "refusal_accuracy": 0.80,
+    "multi_turn_accuracy": 1.00,
 }
 
 
@@ -48,10 +52,15 @@ def load_dataset(path: Path = DATASET_PATH) -> dict:
 def validate_dataset(dataset: dict) -> None:
     documents = dataset.get("documents")
     cases = dataset.get("cases")
+    multi_turn_cases = dataset.get("multi_turn_cases")
     if not isinstance(documents, list) or len(documents) < 4:
         raise ValueError("Evaluation dataset requires at least four documents.")
     if not isinstance(cases, list) or len(cases) < 12:
         raise ValueError("Evaluation dataset requires at least twelve cases.")
+    if not isinstance(multi_turn_cases, list) or len(multi_turn_cases) < 2:
+        raise ValueError(
+            "Evaluation dataset requires at least two multi-turn cases."
+        )
 
     sources = []
     for document in documents:
@@ -105,6 +114,56 @@ def validate_dataset(dataset: dict) -> None:
         if not case["should_refuse"] and not case["expected_sources"]:
             raise ValueError(f"Answerable case {case_id} must expect a source.")
 
+    multi_turn_ids = set()
+    required_multi_turn_fields = {
+        "first_question",
+        "first_answer",
+        "follow_up",
+        "standalone_query",
+        "required_query_terms",
+        "expected_sources",
+        "expected_keywords",
+    }
+    for case in multi_turn_cases:
+        case_id = case.get("id")
+        if (
+            not isinstance(case_id, str)
+            or not case_id
+            or case_id in multi_turn_ids
+        ):
+            raise ValueError(
+                "Multi-turn case IDs must be non-empty and unique."
+            )
+        multi_turn_ids.add(case_id)
+        if not required_multi_turn_fields.issubset(case):
+            raise ValueError(
+                f"Multi-turn case {case_id} is missing a required field."
+            )
+        for field in (
+            "first_question",
+            "first_answer",
+            "follow_up",
+            "standalone_query",
+        ):
+            if not isinstance(case[field], str) or not case[field].strip():
+                raise ValueError(
+                    f"Multi-turn case {case_id} has invalid {field}."
+                )
+        for field in ("required_query_terms", "expected_keywords"):
+            if not isinstance(case[field], list) or not all(
+                isinstance(value, str) and value.strip()
+                for value in case[field]
+            ):
+                raise ValueError(
+                    f"Multi-turn case {case_id} has invalid {field}."
+                )
+        if not isinstance(case["expected_sources"], list) or not set(
+            case["expected_sources"]
+        ).issubset(source_set):
+            raise ValueError(
+                f"Multi-turn case {case_id} references an unknown source."
+            )
+
 
 def _load_light_rag_core():
     """Import the production retriever without loading environment files."""
@@ -156,6 +215,122 @@ def _normalize_result(document, score: float) -> dict:
     }
 
 
+def _has_complete_metadata(item: dict) -> bool:
+    return bool(
+        isinstance(item.get("source"), str)
+        and item["source"]
+        and isinstance(item.get("page"), int)
+        and not isinstance(item["page"], bool)
+        and item["page"] >= 0
+        and isinstance(item.get("content"), str)
+        and item["content"].strip()
+        and isinstance(item.get("score"), (int, float))
+        and not isinstance(item["score"], bool)
+        and math.isfinite(item["score"])
+    )
+
+
+class _FixtureSummarizer:
+    def summarize(
+        self,
+        turns: list[ConversationTurn],
+        max_chars: int,
+    ) -> str:
+        return ""
+
+
+class _FixtureQueryRewriter:
+    def __init__(self, standalone_query: str):
+        self._standalone_query = standalone_query
+
+    def rewrite(
+        self,
+        current_question: str,
+        summary: str,
+        recent_turns: list[ConversationTurn],
+        max_chars: int,
+    ) -> str:
+        return self._standalone_query[:max_chars]
+
+
+def evaluate_multi_turn_cases(
+    light_rag_core,
+    cases: list[dict],
+    top_k: int,
+) -> list[dict]:
+    results = []
+    for case in cases:
+        manager = ConversationContextManager(
+            summarizer=_FixtureSummarizer(),
+            query_rewriter=_FixtureQueryRewriter(
+                case["standalone_query"]
+            ),
+        )
+        context = manager.process(
+            current_question=case["follow_up"],
+            history=[
+                ConversationTurn(
+                    role="user",
+                    content=case["first_question"],
+                ),
+                ConversationTurn(
+                    role="assistant",
+                    content=case["first_answer"],
+                ),
+            ],
+            conversation_id=f"evaluation-{case['id']}",
+            options=ContextOptions(),
+        )
+        scored_documents = light_rag_core.retrieve_docs(
+            context.standalone_query,
+            k=top_k,
+        )
+        normalized_results = [
+            _normalize_result(document, score)
+            for document, score in scored_documents
+        ]
+        combined_content = "\n".join(
+            item["content"] for item in normalized_results
+        )
+        ranked_sources = [
+            item["source"] for item in normalized_results[:3]
+        ]
+        result = {
+            "id": case["id"],
+            "standalone_query": context.standalone_query,
+            "query_terms_present": all(
+                term.lower() in context.standalone_query.lower()
+                for term in case["required_query_terms"]
+            ),
+            "source_hit": bool(
+                set(case["expected_sources"]).intersection(ranked_sources)
+            ),
+            "keyword_match": all(
+                keyword in combined_content
+                for keyword in case["expected_keywords"]
+            ),
+            "metadata_complete": bool(normalized_results)
+            and all(
+                _has_complete_metadata(item)
+                for item in normalized_results
+            ),
+            "actual_refuse": not light_rag_core.has_relevant_docs(
+                scored_documents
+            ),
+            "results": normalized_results,
+        }
+        result["passed"] = bool(
+            result["standalone_query"] == case["standalone_query"]
+            and result["query_terms_present"]
+            and result["source_hit"]
+            and result["keyword_match"]
+            and result["metadata_complete"]
+            and not result["actual_refuse"]
+        )
+        results.append(result)
+    return results
+
+
 def calculate_metrics(cases: list[dict], case_results: list[dict]) -> dict:
     results_by_id = {result["id"]: result for result in case_results}
     answerable_cases = [case for case in cases if not case["should_refuse"]]
@@ -179,18 +354,7 @@ def calculate_metrics(cases: list[dict], case_results: list[dict]) -> dict:
 
         for item in result["results"]:
             total_results += 1
-            if (
-                isinstance(item.get("source"), str)
-                and bool(item["source"])
-                and isinstance(item.get("page"), int)
-                and not isinstance(item["page"], bool)
-                and item["page"] >= 0
-                and isinstance(item.get("content"), str)
-                and bool(item["content"].strip())
-                and isinstance(item.get("score"), (int, float))
-                and not isinstance(item["score"], bool)
-                and math.isfinite(item["score"])
-            ):
+            if _has_complete_metadata(item):
                 complete_metadata += 1
 
         if case["should_refuse"]:
@@ -255,19 +419,33 @@ def evaluate_once(dataset: dict, top_k: int = 3) -> dict:
                     "results": results,
                 }
             )
+        multi_turn_results = evaluate_multi_turn_cases(
+            light_rag_core,
+            dataset["multi_turn_cases"],
+            top_k,
+        )
 
+    metrics = calculate_metrics(dataset["cases"], case_results)
+    metrics["multi_turn_accuracy"] = (
+        sum(result["passed"] for result in multi_turn_results)
+        / len(multi_turn_results)
+        if multi_turn_results
+        else 0.0
+    )
     return {
         "document_count": len(dataset["documents"]),
         "case_count": len(dataset["cases"]),
+        "multi_turn_case_count": len(dataset["multi_turn_cases"]),
         "page_count": page_count,
         "chunk_count": chunk_count,
         "case_results": case_results,
-        "metrics": calculate_metrics(dataset["cases"], case_results),
+        "multi_turn_results": multi_turn_results,
+        "metrics": metrics,
     }
 
 
 def _stability_signature(report: dict) -> tuple:
-    return tuple(
+    single_turn_signature = tuple(
         (
             case_result["id"],
             case_result["actual_refuse"],
@@ -282,6 +460,23 @@ def _stability_signature(report: dict) -> tuple:
         )
         for case_result in report["case_results"]
     )
+    multi_turn_signature = tuple(
+        (
+            case_result["id"],
+            case_result["standalone_query"],
+            case_result["actual_refuse"],
+            tuple(
+                (
+                    item["source"],
+                    item["page"],
+                    round(item["score"], 10),
+                )
+                for item in case_result["results"]
+            ),
+        )
+        for case_result in report["multi_turn_results"]
+    )
+    return single_turn_signature, multi_turn_signature
 
 
 def run_evaluation(
@@ -316,6 +511,7 @@ def main() -> int:
         "Offline RAG evaluation: "
         f"{report['document_count']} documents, "
         f"{report['case_count']} cases, "
+        f"{report.get('multi_turn_case_count', 0)} multi-turn cases, "
         f"{report['chunk_count']} chunks"
     )
     print(f"Hit Rate@1: {metrics['hit_rate_at_1']:.3f}")
@@ -327,6 +523,10 @@ def main() -> int:
     )
     print(f"Refusal accuracy: {metrics['refusal_accuracy']:.3f}")
     print(f"Relevance decision accuracy: {metrics['decision_accuracy']:.3f}")
+    print(
+        "Multi-turn follow-up accuracy: "
+        f"{metrics.get('multi_turn_accuracy', 0.0):.3f}"
+    )
     print(f"Stable across repeated runs: {'yes' if report['stable'] else 'no'}")
     print(f"Quality gates: {'PASS' if report['gates_passed'] else 'FAIL'}")
     return 0 if report["gates_passed"] else 1

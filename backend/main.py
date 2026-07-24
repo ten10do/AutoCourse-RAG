@@ -1,12 +1,43 @@
 import importlib
+import logging
 import os
 from pathlib import Path
 from threading import Lock
 from typing import Literal
+from uuid import uuid4
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+if __package__:
+    from .conversation.context_manager import ConversationContextManager
+    from .conversation.models import (
+        CONVERSATION_ID_PATTERN,
+        MAX_CONVERSATION_ID_CHARS,
+        MAX_HISTORY_TURNS,
+        MAX_QUESTION_CHARS,
+        ContextOptions,
+        ConversationContext,
+        ConversationTurn,
+        normalize_message_text,
+    )
+    from .conversation.query_rewriter import LlmQueryRewriter
+    from .conversation.summarizer import LlmConversationSummarizer
+else:
+    from conversation.context_manager import ConversationContextManager
+    from conversation.models import (
+        CONVERSATION_ID_PATTERN,
+        MAX_CONVERSATION_ID_CHARS,
+        MAX_HISTORY_TURNS,
+        MAX_QUESTION_CHARS,
+        ContextOptions,
+        ConversationContext,
+        ConversationTurn,
+        normalize_message_text,
+    )
+    from conversation.query_rewriter import LlmQueryRewriter
+    from conversation.summarizer import LlmConversationSummarizer
 
 RAG_MODE = os.getenv("RAG_MODE", "light").strip().lower()
 if RAG_MODE not in {"full", "light"}:
@@ -15,8 +46,10 @@ if RAG_MODE not in {"full", "light"}:
 RAG_BACKEND_NAME = "rag_core" if RAG_MODE == "full" else "light_rag_core"
 if __package__:
     rag_backend = importlib.import_module(f".{RAG_BACKEND_NAME}", package=__package__)
+    llm_module = importlib.import_module(".llm_client", package=__package__)
 else:
     rag_backend = importlib.import_module(RAG_BACKEND_NAME)
+    llm_module = importlib.import_module("llm_client")
 
 DATA_DIR = rag_backend.DATA_DIR
 REFUSAL_MESSAGE = rag_backend.REFUSAL_MESSAGE
@@ -31,6 +64,7 @@ retrieve_docs = rag_backend.retrieve_docs
 
 ModelProvider = Literal["Groq", "DeepSeek"]
 knowledge_base_lock = Lock()
+logger = logging.getLogger(__name__)
 LOCAL_FRONTEND_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -60,9 +94,27 @@ app.add_middleware(
 
 
 class AskRequest(BaseModel):
-    question: str = Field(min_length=1)
+    question: str = Field(min_length=1, max_length=MAX_QUESTION_CHARS)
     model_provider: ModelProvider = "Groq"
     top_k: int = Field(default=4, ge=1, le=8)
+    conversation_id: str | None = Field(
+        default=None,
+        max_length=MAX_CONVERSATION_ID_CHARS,
+        pattern=CONVERSATION_ID_PATTERN,
+    )
+    history: list[ConversationTurn] = Field(
+        default_factory=list,
+        max_length=MAX_HISTORY_TURNS,
+    )
+    context_options: ContextOptions = Field(default_factory=ContextOptions)
+
+    @field_validator("question")
+    @classmethod
+    def normalize_question(cls, value: str) -> str:
+        normalized = normalize_message_text(value)
+        if not normalized:
+            raise ValueError("问题不能为空。")
+        return normalized
 
 
 class StudyRequest(BaseModel):
@@ -80,6 +132,7 @@ class AskResponse(BaseModel):
     answer: str
     sources: list[SourceItem]
     is_refused: bool
+    conversation_context: ConversationContext | None = None
 
 
 class UploadResponse(BaseModel):
@@ -149,6 +202,31 @@ def serialize_sources(docs):
     return sources
 
 
+def create_context_manager(provider: ModelProvider):
+    completion = lambda prompt: llm_module.generate_context_text(
+        prompt,
+        provider=provider,
+    )
+    return ConversationContextManager(
+        summarizer=LlmConversationSummarizer(completion),
+        query_rewriter=LlmQueryRewriter(completion),
+    )
+
+
+def generate_conversation_id():
+    return f"conversation-{uuid4()}"
+
+
+def serialize_prompt_history(turns: list[ConversationTurn]):
+    return [
+        {
+            "role": turn.role,
+            "content": turn.content,
+        }
+        for turn in turns
+    ]
+
+
 def run_study_task(task_type: str, request: StudyRequest):
     try:
         content = generate_learning_content(
@@ -190,8 +268,35 @@ def upload(files: list[UploadFile] = File(...)):
 @app.post("/ask", response_model=AskResponse)
 def ask(request: AskRequest):
     try:
+        conversation_id = request.conversation_id or generate_conversation_id()
+        context_result = create_context_manager(
+            request.model_provider
+        ).process(
+            current_question=request.question,
+            history=request.history,
+            conversation_id=conversation_id,
+            options=request.context_options,
+        )
+        context_metadata = context_result.metadata
+        logger.info(
+            "conversation_context_processed",
+            extra={
+                "conversation_id": conversation_id,
+                "history_turn_count": context_metadata.history_turn_count,
+                "retained_turn_count": context_metadata.retained_turn_count,
+                "compressed_turn_count": context_metadata.compressed_turn_count,
+                "was_compressed": context_metadata.was_compressed,
+                "query_rewrite_status": context_metadata.query_rewrite_status,
+                "standalone_query_length": len(
+                    context_result.standalone_query
+                ),
+            },
+        )
         with knowledge_base_lock:
-            docs = retrieve_docs(request.question, k=request.top_k)
+            docs = retrieve_docs(
+                context_result.standalone_query,
+                k=request.top_k,
+            )
 
         sources = serialize_sources(docs)
         if not has_relevant_docs(docs):
@@ -199,17 +304,30 @@ def ask(request: AskRequest):
                 answer=REFUSAL_MESSAGE,
                 sources=sources,
                 is_refused=True,
+                conversation_context=context_metadata,
             )
 
-        answer = generate_answer(
-            request.question,
-            docs,
-            provider=request.model_provider,
-        )
+        if request.history:
+            answer = generate_answer(
+                request.question,
+                docs,
+                provider=request.model_provider,
+                conversation_summary=context_result.summary or None,
+                conversation_history=serialize_prompt_history(
+                    context_result.retained_turns
+                ),
+            )
+        else:
+            answer = generate_answer(
+                request.question,
+                docs,
+                provider=request.model_provider,
+            )
         return AskResponse(
             answer=answer,
             sources=sources,
             is_refused=False,
+            conversation_context=context_metadata,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

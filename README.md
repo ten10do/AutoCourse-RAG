@@ -2,7 +2,7 @@
 
 ## 项目简介
 
-基于 RAG 的自动化课程智能学习平台是一个采用 React + FastAPI 前后端分离架构的课程资料 RAG（Retrieval-Augmented Generation）应用。用户可以上传多份自动化课程 PDF，构建本地向量知识库，并通过 Groq 或 DeepSeek 模型完成课程问答、来源追溯、课程总结、知识点提取和复习题生成。
+基于 RAG 的自动化课程智能学习平台是一个采用 React + FastAPI 前后端分离架构的课程资料 RAG（Retrieval-Augmented Generation）应用。用户可以上传多份自动化课程 PDF，构建本地向量知识库，并通过 Groq 或 DeepSeek 模型完成多轮课程问答、来源追溯、课程总结、知识点提取和复习题生成。
 
 系统将大模型回答限制在课程资料检索结果内，并通过距离阈值拒绝相关性不足的问题，降低脱离资料生成内容的风险。项目同时保留原有 Streamlit 版本，便于对比单体应用与前后端分离架构的实现方式。
 
@@ -84,7 +84,10 @@ flowchart LR
   → PDF 文本解析
   → chunk 切分
   → 根据 RAG_MODE 构建 full 或 light 知识库
-  → 检索与排序
+  → 校验并裁剪客户端会话历史
+  → 保留最近对话、压缩较早历史
+  → 将当前追问改写为 standalone_query
+  → 使用 standalone_query 检索与排序
   → 距离阈值判断
   → 相关时调用所选模型生成回答
   → 不相关时直接拒答，不调用模型
@@ -92,6 +95,32 @@ flowchart LR
 ```
 
 课程总结、知识点提取和复习题生成同样只使用当前知识库中的代表性片段作为上下文。
+
+## 多轮对话与上下文压缩
+
+多轮问答采用“客户端保存会话、后端无状态处理上下文”的结构，不依赖 Render 进程内存或服务端全局会话字典：
+
+```text
+当前问题
+  → 历史格式与长度校验
+  → 历史总量裁剪
+  → 最近对话窗口与较早历史摘要压缩
+  → 上下文字符预算控制
+  → standalone_query 独立问题改写
+  → full / light RAG 检索
+  → 相似度阈值与拒答判断
+  → 基于当前问题和本轮检索证据生成回答
+  → 返回回答、来源和上下文处理元数据
+```
+
+- React 为每个会话生成独立 `conversation_id`，在带版本号的 `localStorage` 结构中保存消息；刷新后可恢复，并支持新建会话和清空当前会话。
+- 本地最多保存 8 个会话、每个会话最多 60 条消息；超限时淘汰最旧记录，历史来源只保留文件、页码和分数，不保存来源正文。
+- 后端最多接收 80 条历史，默认处理最近 40 条；默认保留最近 6 条原文，将超过压缩阈值的较早历史摘要化。
+- 上下文默认最多 12000 字符，压缩阈值为 6000 字符；超出预算时先缩短摘要，再从最早的保留消息开始裁剪，当前问题始终保留。
+- Summarizer 和 Query Rewriter 生产实现复用当前 Groq / DeepSeek Provider。摘要或改写失败时使用确定性降级，不会令问答接口返回 500。
+- `standalone_query` 只用于本轮检索；最终回答仍针对当前问题，来源只取自本轮检索结果，历史助手回答不能替代知识库证据。
+- full 与 light 模式共用该流程，原有来源追踪、相关性阈值和拒答机制保持不变。
+- 自动化测试使用 Fake Summarizer、Fake Query Rewriter、Mock 检索器和固定离线资料，不依赖外部模型或网络。
 
 ## full / light 双模式
 
@@ -105,6 +134,7 @@ flowchart LR
 ## 核心功能
 
 - 支持一次上传多份 PDF，并统一构建课程知识库。
+- 支持连续追问、指代消解、最近历史窗口和较早历史摘要压缩。
 - 对每份文档执行文本解析和 chunk 切分，并根据运行模式构建 Chroma 向量库或 TF-IDF 内存知识库。
 - `full` 模式使用 Chroma 持久化存储向量，并通过 `similarity_search_with_score` 完成语义检索。
 - `light` 模式使用 TF-IDF 与余弦相似度完成低内存检索。
@@ -123,6 +153,8 @@ flowchart LR
 - 通过 Axios 统一封装健康检查、上传、问答、学习辅助和知识库重置请求。
 - 支持拖拽或选择多份 PDF，并通过 `FormData` 上传至 FastAPI。
 - 支持 Groq / DeepSeek 模型选择和检索片段数量调整。
+- 支持多条问答按时间顺序展示，每条回答保留各自来源与可折叠的上下文处理信息。
+- 支持本地会话持久化、新建会话、清空当前会话和失败后无重复消息重试。
 - 展示请求 loading、接口错误、拒答、知识库状态和构建结果。
 - 使用可折叠来源卡片收纳参考内容，避免长文本影响页面浏览。
 - 在知识库清空或重建后同步刷新状态，并清除旧知识库对应的页面结果。
@@ -134,8 +166,9 @@ flowchart LR
 
 评测数据包括：
 
-- 4 份课程测试资料，共 8 页、8 个检索 chunk。
+- 5 份课程测试资料，共 10 页、10 个检索 chunk。
 - 12 个评测问题：8 个单文档问题、2 个跨文档问题、2 个资料外拒答问题。
+- 2 个确定性多轮追问：PID 积分项和 PLC 扫描周期输入响应；使用 Fake Query Rewriter 生成独立问题，再复用生产 light 检索逻辑。
 - 每个问题均定义预期来源、预期关键词和是否应拒答。
 
 运行评测：
@@ -153,6 +186,7 @@ flowchart LR
 | MRR | `1.000` | `>= 0.70` |
 | 来源元数据完整率 | `1.000` | `>= 1.00` |
 | 拒答准确率 | `1.000` | `>= 0.80` |
+| 多轮追问准确率 | `1.000` | `>= 1.00` |
 
 相同数据集会重复运行并比较来源、页码和距离排序；当前稳定性检查通过，最终质量门槛结果为 `PASS`。任何受门槛约束的指标未达标或重复运行结果不稳定时，评测命令都会返回非零退出码。
 
@@ -160,8 +194,8 @@ flowchart LR
 
 当前自动回归结果：
 
-- 后端：`23 passed`，另有 5 个子测试通过。
-- 前端：3 个测试文件、`4 passed`。
+- 后端：`49 passed`，另有 5 个子测试通过。
+- 前端：5 个测试文件、`20 passed`。
 - Vite 生产构建：通过。
 
 本地验证命令：
@@ -202,7 +236,7 @@ FastAPI 提供以下接口，默认服务地址为 `http://localhost:8000`，交
 | --- | --- | --- | --- |
 | `GET` | `/health` | 获取服务与知识库状态 | 无 |
 | `POST` | `/upload` | 上传多份 PDF 并重建知识库 | `multipart/form-data`：`files` |
-| `POST` | `/ask` | 执行检索、阈值判断和问答 | `question`、`model_provider`、`top_k` |
+| `POST` | `/ask` | 执行上下文处理、检索、阈值判断和问答 | 原字段 `question`、`model_provider`、`top_k`；可选 `conversation_id`、`history`、`context_options` |
 | `POST` | `/study/summary` | 生成课程总结 | `model_provider` |
 | `POST` | `/study/knowledge-points` | 提取核心知识点 | `model_provider` |
 | `POST` | `/study/quiz` | 生成复习题和参考答案 | `model_provider` |
@@ -221,9 +255,25 @@ FastAPI 提供以下接口，默认服务地址为 `http://localhost:8000`，交
       "content": "用于生成回答的参考片段"
     }
   ],
-  "is_refused": false
+  "is_refused": false,
+  "conversation_context": {
+    "conversation_id": "conversation-example",
+    "standalone_query": "PID 控制器中的积分项有什么作用？",
+    "history_turn_count": 2,
+    "retained_turn_count": 2,
+    "compressed_turn_count": 0,
+    "was_compressed": false,
+    "summary_used": false,
+    "estimated_context_size": 120,
+    "query_rewrite_status": "rewritten",
+    "compression_status": "not_needed",
+    "fallback_used": false,
+    "context_limit_applied": false
+  }
 }
 ```
+
+旧客户端完全不发送多轮字段时仍按原单轮路径运行；原有回答、来源和拒答字段保持不变。`context_options` 默认值为最近 6 条、历史 40 条、上下文 12000 字符、压缩阈值 6000 字符，可在服务端限定范围内调整。
 
 ## 项目结构
 
@@ -238,6 +288,12 @@ AutoCourse-RAG/
 │   │   ├── fixtures/
 │   │   │   └── dataset.json        # 固定离线评测资料与问题
 │   │   └── run.py                  # 评测指标、门槛与命令入口
+│   ├── conversation/
+│   │   ├── models.py               # 多轮数据模型与集中限制
+│   │   ├── context_manager.py      # 无状态上下文处理编排
+│   │   ├── budget.py               # 字符预算估算与裁剪
+│   │   ├── summarizer.py           # 生产摘要器与确定性降级
+│   │   └── query_rewriter.py       # 独立问题改写与确定性降级
 │   ├── main.py                     # FastAPI 应用、请求模型和 REST API
 │   ├── rag_core.py                 # full 模式 Chroma 检索
 │   ├── light_rag_core.py           # light 模式 TF-IDF 检索
@@ -245,6 +301,9 @@ AutoCourse-RAG/
 │   ├── test_main.py                # FastAPI 接口测试
 │   ├── test_light_rag_core.py      # light 检索回归测试
 │   ├── test_evaluation.py          # 离线评测与质量门槛测试
+│   ├── test_conversation_context.py # 上下文、压缩和改写测试
+│   ├── test_multiturn_api.py       # 多轮 API 与隔离测试
+│   ├── test_multiturn_llm.py       # Prompt 和 Provider 兼容测试
 │   ├── requirements.txt            # 轻量模式依赖
 │   ├── requirements-full.txt       # full 模式附加依赖
 │   └── runtime.txt                 # Render Python 运行版本
@@ -254,11 +313,14 @@ AutoCourse-RAG/
 │   │   │   ├── Sidebar.jsx
 │   │   │   ├── UploadPanel.jsx
 │   │   │   ├── ChatPanel.jsx
+│   │   │   ├── ChatPanel.test.jsx
 │   │   │   ├── SourceCard.jsx
 │   │   │   ├── SourceCard.test.jsx
 │   │   │   └── StudyTools.jsx
 │   │   ├── api.js                  # Axios 接口封装
 │   │   ├── api.test.js
+│   │   ├── conversationStore.js    # 版本化本地会话管理
+│   │   ├── conversationStore.test.js
 │   │   ├── App.jsx                 # 前端状态管理与页面组合
 │   │   ├── App.test.jsx
 │   │   ├── main.jsx                # React 入口
@@ -398,6 +460,7 @@ npm.cmd run build
 - **原生 Web 页面实现**：使用 HTML、CSS 和 JavaScript 完成 PDF 上传、模型选择、问答工作区、来源追溯和学习工具展示，不依赖复杂 UI 框架。
 - **前后端分离**：React 通过 Axios 调用 FastAPI RESTful API，接口职责和数据模型清晰。
 - **完整 RAG 链路**：覆盖 PDF 解析、chunk 切分、双模式知识库、检索排序、阈值判断和回答生成。
+- **无状态多轮 RAG**：客户端携带会话历史，后端完成预算控制、摘要压缩和独立查询改写，在不引入额外基础设施的前提下支持连续追问。
 - **多文档知识库**：支持多份课程资料统一建库，并保留每个 chunk 的来源文件和页码信息。
 - **可解释与低幻觉设计**：展示检索距离和参考片段，相关性不足时跳过大模型调用并直接拒答。
 - **双模型接入**：通过统一客户端封装 Groq 和 OpenAI-compatible DeepSeek API，前端可直接切换模型服务。

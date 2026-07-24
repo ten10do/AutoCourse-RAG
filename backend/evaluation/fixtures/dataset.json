@@ -35,6 +35,15 @@
         "PID 控制器由比例、积分和微分三个环节组成。比例作用对当前偏差快速响应；积分作用累积历史偏差，可以消除恒值扰动造成的稳态误差；微分作用反映偏差变化趋势，可增加阻尼并改善瞬态响应。",
         "执行器饱和时，积分项仍持续累积会产生积分饱和，导致退出饱和后恢复缓慢和较大超调。抗积分饱和可采用积分限幅或反计算方法。实际微分环节常加入低通滤波，以降低测量噪声被放大的风险。"
       ]
+    },
+    {
+      "source": "plc_scan_cycle.pdf",
+      "title": "PLC 扫描周期",
+      "keywords": ["PLC", "扫描周期", "输入采样", "程序执行", "输出刷新", "输入响应"],
+      "pages": [
+        "PLC 扫描周期通常依次包括输入采样、用户程序执行和输出刷新。输入采样阶段读取现场输入并写入输入映像区，程序执行阶段使用映像区数据运算，输出刷新阶段把输出映像区结果送往输出模块。",
+        "PLC 对输入信号的响应速度受扫描周期影响。输入信号若刚好错过输入采样，通常要等到下一扫描周期才能被读取；程序执行时间增长也会延长扫描周期和输入响应时间。高速信号可使用高速计数或中断功能。"
+      ]
     }
   ],
   "cases": [
@@ -139,6 +148,28 @@
       "expected_sources": [],
       "expected_keywords": [],
       "should_refuse": true
+    }
+  ],
+  "multi_turn_cases": [
+    {
+      "id": "multiturn-pid-integral",
+      "first_question": "PID 控制器由哪些环节组成？",
+      "first_answer": "PID 控制器由比例、积分和微分环节组成。",
+      "follow_up": "其中积分项有什么作用？",
+      "standalone_query": "PID 控制器中的积分项有什么作用？",
+      "required_query_terms": ["PID", "积分项"],
+      "expected_sources": ["pid_control.pdf"],
+      "expected_keywords": ["积分作用", "稳态误差"]
+    },
+    {
+      "id": "multiturn-plc-input-response",
+      "first_question": "PLC 扫描周期包括哪些阶段？",
+      "first_answer": "包括输入采样、程序执行和输出刷新。",
+      "follow_up": "它对输入响应有什么影响？",
+      "standalone_query": "PLC 扫描周期对输入响应有什么影响？",
+      "required_query_terms": ["PLC", "扫描周期", "输入响应"],
+      "expected_sources": ["plc_scan_cycle.pdf"],
+      "expected_keywords": ["扫描周期", "输入响应"]
     }
   ]
 }

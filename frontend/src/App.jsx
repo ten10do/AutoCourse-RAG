@@ -124,6 +124,7 @@ export default function App() {
             key={`chat-${knowledgeBaseRevision}`}
             modelProvider={modelProvider}
             onResult={setChatResult}
+            knowledgeBaseRevision={knowledgeBaseRevision}
           />
 
           <StudyTools key={`study-${knowledgeBaseRevision}`} modelProvider={modelProvider} />

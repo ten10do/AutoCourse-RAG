@@ -13,8 +13,9 @@ class OfflineEvaluationTests(unittest.TestCase):
 
     def test_dataset_has_required_coverage(self):
         categories = [case["category"] for case in self.dataset["cases"]]
-        self.assertEqual(len(self.dataset["documents"]), 4)
+        self.assertEqual(len(self.dataset["documents"]), 5)
         self.assertEqual(len(self.dataset["cases"]), 12)
+        self.assertEqual(len(self.dataset["multi_turn_cases"]), 2)
         self.assertEqual(categories.count("single-document"), 8)
         self.assertEqual(categories.count("cross-document"), 2)
         self.assertEqual(categories.count("out-of-scope"), 2)
@@ -27,14 +28,32 @@ class OfflineEvaluationTests(unittest.TestCase):
 
     def test_real_light_retriever_meets_quality_gates(self):
         metrics = self.report["metrics"]
-        self.assertEqual(self.report["page_count"], 8)
-        self.assertEqual(self.report["chunk_count"], 8)
+        self.assertEqual(self.report["page_count"], 10)
+        self.assertEqual(self.report["chunk_count"], 10)
         self.assertGreaterEqual(metrics["hit_rate_at_3"], 0.80)
         self.assertGreaterEqual(metrics["mrr"], 0.70)
         self.assertEqual(metrics["metadata_completeness"], 1.00)
         self.assertGreaterEqual(metrics["refusal_accuracy"], 0.80)
         self.assertEqual(metrics["decision_accuracy"], 1.00)
+        self.assertEqual(metrics["multi_turn_accuracy"], 1.00)
         self.assertTrue(self.report["gates_passed"])
+
+    def test_multiturn_followups_use_standalone_query_and_real_light_retrieval(self):
+        results = {
+            result["id"]: result
+            for result in self.report["multi_turn_results"]
+        }
+        for case in self.dataset["multi_turn_cases"]:
+            result = results[case["id"]]
+            self.assertEqual(
+                result["standalone_query"],
+                case["standalone_query"],
+            )
+            self.assertTrue(result["query_terms_present"])
+            self.assertTrue(result["source_hit"])
+            self.assertTrue(result["keyword_match"])
+            self.assertTrue(result["metadata_complete"])
+            self.assertFalse(result["actual_refuse"])
 
     def test_expected_keywords_are_present_in_retrieved_chunks(self):
         results_by_id = {

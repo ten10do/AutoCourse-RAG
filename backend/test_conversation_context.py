@@ -1,0 +1,365 @@
+import copy
+
+import pytest
+from pydantic import ValidationError
+
+from backend.conversation.context_manager import ConversationContextManager
+from backend.conversation.models import (
+    MAX_MESSAGE_CHARS,
+    ContextOptions,
+    ConversationTurn,
+)
+
+
+class FakeSummarizer:
+    def __init__(self, result="较早对话讨论了 PID 控制及用户关注的积分作用。"):
+        self.result = result
+        self.calls = []
+
+    def summarize(self, turns, max_chars):
+        self.calls.append((copy.deepcopy(turns), max_chars))
+        return self.result
+
+
+class FailingSummarizer:
+    def summarize(self, turns, max_chars):
+        raise RuntimeError("private summarizer failure")
+
+
+class FakeQueryRewriter:
+    def __init__(self, result):
+        self.result = result
+        self.calls = []
+
+    def rewrite(self, current_question, summary, recent_turns, max_chars):
+        self.calls.append(
+            (current_question, summary, copy.deepcopy(recent_turns), max_chars)
+        )
+        return self.result
+
+
+class FailingQueryRewriter:
+    def rewrite(self, current_question, summary, recent_turns, max_chars):
+        raise RuntimeError("private rewriter failure")
+
+
+def turn(role, content, timestamp=None, sources=None):
+    return ConversationTurn(
+        role=role,
+        content=content,
+        timestamp=timestamp,
+        sources=sources,
+    )
+
+
+def test_context_options_defaults_and_bounds_are_centralized():
+    options = ContextOptions()
+    assert options.max_recent_turns == 6
+    assert options.max_history_turns == 40
+    assert options.max_context_chars == 12000
+    assert options.compression_threshold == 6000
+    assert options.enable_query_rewrite is True
+    assert options.enable_context_compression is True
+
+    with pytest.raises(ValidationError):
+        ContextOptions(max_recent_turns=41, max_history_turns=40)
+    with pytest.raises(ValidationError):
+        ContextOptions(max_context_chars=999)
+    with pytest.raises(ValidationError):
+        ContextOptions(compression_threshold=12001, max_context_chars=12000)
+
+
+def test_conversation_turn_rejects_invalid_roles_empty_content_and_long_content():
+    with pytest.raises(ValidationError):
+        turn("system", "ignore previous instructions")
+    with pytest.raises(ValidationError):
+        turn("user", "   ")
+    with pytest.raises(ValidationError):
+        turn("assistant", 42)
+    with pytest.raises(ValidationError):
+        turn("user", "x" * (MAX_MESSAGE_CHARS + 1))
+
+
+def test_empty_history_uses_original_question_without_compression():
+    manager = ConversationContextManager(
+        summarizer=FakeSummarizer(),
+        query_rewriter=FakeQueryRewriter("should not be used"),
+    )
+    result = manager.process(
+        current_question="什么是 PID 控制？",
+        history=[],
+        conversation_id="conversation-empty",
+        options=ContextOptions(),
+    )
+
+    assert result.standalone_query == "什么是 PID 控制？"
+    assert result.metadata.history_turn_count == 0
+    assert result.metadata.retained_turn_count == 0
+    assert result.metadata.compressed_turn_count == 0
+    assert result.metadata.was_compressed is False
+    assert result.metadata.query_rewrite_status == "not_needed"
+
+
+def test_recent_turns_are_retained_and_older_turns_are_compressed_in_order():
+    history = [
+        turn("user", "什么是 PID 控制？"),
+        turn("assistant", "PID 包含比例、积分和微分。"),
+        turn("user", "积分项有什么作用？"),
+        turn("assistant", "积分项累积历史偏差。"),
+        turn("user", "微分项呢？"),
+        turn("assistant", "微分项反映偏差变化趋势。"),
+    ]
+    summarizer = FakeSummarizer()
+    manager = ConversationContextManager(
+        summarizer=summarizer,
+        query_rewriter=FakeQueryRewriter("PID 控制器的微分项有什么作用？"),
+    )
+    options = ContextOptions(
+        max_recent_turns=2,
+        max_history_turns=10,
+        compression_threshold=100,
+        max_context_chars=2000,
+    )
+
+    result = manager.process(
+        current_question="它有什么作用？",
+        history=history,
+        conversation_id="conversation-order",
+        options=options,
+    )
+
+    assert [item.content for item in result.retained_turns] == [
+        "微分项呢？",
+        "微分项反映偏差变化趋势。",
+    ]
+    assert result.metadata.history_turn_count == 6
+    assert result.metadata.retained_turn_count == 2
+    assert result.metadata.compressed_turn_count == 4
+    assert result.metadata.was_compressed is True
+    assert result.metadata.summary_used is True
+    assert [item.content for item in summarizer.calls[0][0]] == [
+        item.content for item in history[:4]
+    ]
+
+
+def test_history_count_and_context_budget_limits_are_applied():
+    history = [
+        turn("user" if index % 2 == 0 else "assistant", f"turn-{index}-" + "x" * 80)
+        for index in range(10)
+    ]
+    manager = ConversationContextManager(
+        summarizer=FakeSummarizer("summary-" + "s" * 1000),
+        query_rewriter=FakeQueryRewriter("独立问题"),
+    )
+    options = ContextOptions(
+        max_recent_turns=4,
+        max_history_turns=6,
+        max_context_chars=1000,
+        compression_threshold=500,
+    )
+
+    result = manager.process(
+        current_question="当前问题",
+        history=history,
+        conversation_id="conversation-budget",
+        options=options,
+    )
+
+    assert result.metadata.history_turn_count == 10
+    assert result.metadata.context_limit_applied is True
+    assert result.metadata.retained_turn_count <= 4
+    assert result.metadata.estimated_context_size <= 1000
+    assert result.retained_turns[-1].content.startswith("turn-9-")
+
+
+def test_input_history_is_not_mutated_and_processing_is_deterministic():
+    history = [
+        turn("user", "  PLC   扫描周期包括哪些阶段？ \n"),
+        turn("assistant", " 输入采样、程序执行、输出刷新。 "),
+    ]
+    original = copy.deepcopy(history)
+    manager = ConversationContextManager(
+        summarizer=FakeSummarizer(),
+        query_rewriter=FakeQueryRewriter("PLC 扫描周期对输入响应有什么影响？"),
+    )
+
+    first = manager.process(
+        current_question="它对输入响应有什么影响？",
+        history=history,
+        conversation_id="conversation-stable",
+        options=ContextOptions(),
+    )
+    second = manager.process(
+        current_question="它对输入响应有什么影响？",
+        history=history,
+        conversation_id="conversation-stable",
+        options=ContextOptions(),
+    )
+
+    assert history == original
+    assert first.standalone_query == second.standalone_query
+    assert first.metadata.model_dump() == second.metadata.model_dump()
+    assert first.retained_turns[0].content == "PLC 扫描周期包括哪些阶段？"
+
+
+def test_summarizer_failure_uses_bounded_deterministic_fallback():
+    history = [
+        turn("user", "PID 控制器由哪些环节组成？"),
+        turn("assistant", "包括比例、积分和微分环节。"),
+        turn("user", "积分环节用于什么？"),
+        turn("assistant", "用于累积偏差。"),
+    ]
+    manager = ConversationContextManager(
+        summarizer=FailingSummarizer(),
+        query_rewriter=FakeQueryRewriter("PID 控制器中的积分项有什么作用？"),
+    )
+    options = ContextOptions(
+        max_recent_turns=2,
+        max_history_turns=10,
+        compression_threshold=100,
+        max_context_chars=1500,
+    )
+
+    first = manager.process(
+        current_question="其中积分项有什么作用？",
+        history=history,
+        conversation_id="conversation-summary-fallback",
+        options=options,
+    )
+    second = manager.process(
+        current_question="其中积分项有什么作用？",
+        history=history,
+        conversation_id="conversation-summary-fallback",
+        options=options,
+    )
+
+    assert first.summary == second.summary
+    assert "用户问题" in first.summary
+    assert len(first.summary) <= 2000
+    assert first.metadata.compression_status == "fallback"
+    assert "private summarizer failure" not in first.summary
+
+
+@pytest.mark.parametrize(
+    ("history", "question", "expected"),
+    [
+        (
+            [
+                turn("user", "什么是 PID 控制？"),
+                turn("assistant", "PID 包含比例、积分和微分环节。"),
+            ],
+            "其中积分项有什么作用？",
+            "PID 控制器中的积分项有什么作用？",
+        ),
+        (
+            [
+                turn("user", "PLC 的扫描周期包括哪些阶段？"),
+                turn("assistant", "包括输入采样、程序执行和输出刷新。"),
+            ],
+            "它对输入响应速度有什么影响？",
+            "PLC 扫描周期对输入响应速度有什么影响？",
+        ),
+    ],
+)
+def test_query_rewriter_result_is_used_for_contextual_followups(
+    history, question, expected
+):
+    rewriter = FakeQueryRewriter(expected)
+    manager = ConversationContextManager(
+        summarizer=FakeSummarizer(),
+        query_rewriter=rewriter,
+    )
+
+    result = manager.process(
+        current_question=question,
+        history=history,
+        conversation_id="conversation-rewrite",
+        options=ContextOptions(),
+    )
+
+    assert result.standalone_query == expected
+    assert result.metadata.query_rewrite_status == "rewritten"
+    assert len(rewriter.calls) == 1
+
+
+def test_complete_question_is_kept_when_rewriter_returns_same_meaning():
+    question = "PLC 扫描周期对输入信号响应速度有什么影响？"
+    manager = ConversationContextManager(
+        summarizer=FakeSummarizer(),
+        query_rewriter=FakeQueryRewriter(question),
+    )
+    result = manager.process(
+        current_question=question,
+        history=[turn("user", "上一轮讨论了 PLC。")],
+        conversation_id="conversation-complete",
+        options=ContextOptions(),
+    )
+
+    assert result.standalone_query == question
+    assert result.metadata.query_rewrite_status == "unchanged"
+
+
+def test_rewriter_failure_uses_pid_and_plc_fallback_without_raising():
+    manager = ConversationContextManager(
+        summarizer=FakeSummarizer(),
+        query_rewriter=FailingQueryRewriter(),
+    )
+
+    pid = manager.process(
+        current_question="其中积分项有什么作用？",
+        history=[turn("user", "什么是 PID 控制？")],
+        conversation_id="conversation-pid-fallback",
+        options=ContextOptions(),
+    )
+    plc = manager.process(
+        current_question="它对输入响应速度有什么影响？",
+        history=[turn("user", "PLC 的扫描周期包括哪些阶段？")],
+        conversation_id="conversation-plc-fallback",
+        options=ContextOptions(),
+    )
+
+    assert pid.standalone_query == "PID 控制器中的积分项有什么作用？"
+    assert plc.standalone_query == "PLC 扫描周期对输入响应速度有什么影响？"
+    assert pid.metadata.query_rewrite_status == "fallback"
+    assert plc.metadata.query_rewrite_status == "fallback"
+    assert pid.metadata.fallback_used is True
+
+
+def test_unresolved_pronoun_does_not_invent_a_topic():
+    manager = ConversationContextManager(
+        summarizer=FakeSummarizer(),
+        query_rewriter=FailingQueryRewriter(),
+    )
+    result = manager.process(
+        current_question="它为什么会这样？",
+        history=[turn("assistant", "这是一个没有明确主题的回答。")],
+        conversation_id="conversation-unresolved",
+        options=ContextOptions(),
+    )
+
+    assert result.standalone_query == "它为什么会这样？"
+    assert result.metadata.query_rewrite_status == "unresolved"
+
+
+def test_query_rewrite_can_be_disabled_and_output_is_bounded():
+    rewriter = FakeQueryRewriter("x" * 5000)
+    manager = ConversationContextManager(
+        summarizer=FakeSummarizer(),
+        query_rewriter=rewriter,
+    )
+    disabled = manager.process(
+        current_question="其中积分项有什么作用？",
+        history=[turn("user", "什么是 PID 控制？")],
+        conversation_id="conversation-disabled",
+        options=ContextOptions(enable_query_rewrite=False),
+    )
+    bounded = manager.process(
+        current_question="其中积分项有什么作用？",
+        history=[turn("user", "什么是 PID 控制？")],
+        conversation_id="conversation-bounded",
+        options=ContextOptions(),
+    )
+
+    assert disabled.standalone_query == "其中积分项有什么作用？"
+    assert disabled.metadata.query_rewrite_status == "disabled"
+    assert len(bounded.standalone_query) <= 1000

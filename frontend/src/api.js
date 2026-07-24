@@ -24,11 +24,25 @@ export async function uploadPdfs(files) {
   return response.data
 }
 
-export async function askQuestion({ question, modelProvider, topK }) {
-  const response = await apiClient.post('/ask', {
+export async function askQuestion({
+  question,
+  modelProvider,
+  topK,
+  conversationId,
+  history,
+  contextOptions,
+}) {
+  const payload = {
     question,
     model_provider: modelProvider,
     top_k: topK,
+  }
+  if (conversationId) payload.conversation_id = conversationId
+  if (Array.isArray(history)) payload.history = history
+  if (contextOptions) payload.context_options = contextOptions
+
+  const response = await apiClient.post('/ask', {
+    ...payload,
   })
   return response.data
 }
