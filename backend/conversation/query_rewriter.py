@@ -31,6 +31,9 @@ REFERENCE_SUBJECT_PREFIXES = ("其中", "该", "这个")
 GENERIC_SUBJECT_SUFFIX_PATTERN = (
     r"(?:环节|项目|项|模块|部分|阶段|过程|方法|参数|回路)$"
 )
+STRUCTURAL_SUBTOPIC_SUFFIX_PATTERN = (
+    r"(?:环节|项|模块|部分|阶段|参数|回路)$"
+)
 
 
 class QueryRewriter(Protocol):
@@ -199,6 +202,10 @@ def _is_subject_anchored(subject: str, assistant_text: str) -> bool:
     return len(base_subject) >= 2 and base_subject in normalized_answer
 
 
+def _is_structural_subtopic(subject: str) -> bool:
+    return bool(re.search(STRUCTURAL_SUBTOPIC_SUFFIX_PATTERN, subject))
+
+
 def _append_unique(values: list[str], value: str) -> None:
     if value and value not in values:
         values.append(value)
@@ -268,6 +275,7 @@ def _extract_recent_user_topic(
             and (
                 has_reference_prefix
                 or _is_subject_anchored(subject, previous_assistant)
+                or _is_structural_subtopic(subject)
                 or (
                     bool(summary_topics)
                     and not recent_root_seen

@@ -29,6 +29,18 @@ class OfflineEvaluationTests(unittest.TestCase):
             fallback_categories.count("deterministic-fallback"),
             11,
         )
+        explicit_subtopic = next(
+            case
+            for case in self.dataset["fallback_cases"]
+            if case["id"]
+            == "fallback-explicit-subtopic-no-assistant-echo"
+        )
+        prior_assistant_text = " ".join(
+            turn["content"]
+            for turn in explicit_subtopic["history"][:2]
+            if turn["role"] == "assistant"
+        )
+        self.assertNotIn("反馈环节", prior_assistant_text)
 
     def test_dataset_rejects_an_invalid_question(self):
         invalid_dataset = copy.deepcopy(self.dataset)

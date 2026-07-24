@@ -510,14 +510,14 @@ def test_qi_pronoun_fallback_respects_word_boundaries_and_possessives():
         assert result.metadata.fallback_used is True
 
 
-def test_fallback_recovers_explicit_recent_subtopic_without_reference_prefix():
+def test_fallback_recovers_explicit_subtopic_without_assistant_echo():
     manager = ConversationContextManager(
         summarizer=FakeSummarizer(),
         query_rewriter=FailingQueryRewriter(),
     )
     history = [
         turn("user", "闭环控制是什么？"),
-        turn("assistant", "闭环控制通过反馈环节修正偏差。"),
+        turn("assistant", "闭环控制通过测量输出修正偏差。"),
         turn("user", "反馈环节有什么作用？"),
         turn("assistant", "反馈环节用于比较输出和设定值。"),
     ]

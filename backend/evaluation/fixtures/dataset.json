@@ -309,11 +309,11 @@
       "expected_fallback_used": true
     },
     {
-      "id": "fallback-explicit-subtopic",
+      "id": "fallback-explicit-subtopic-no-assistant-echo",
       "category": "deterministic-fallback",
       "history": [
         {"role": "user", "content": "闭环控制是什么？"},
-        {"role": "assistant", "content": "闭环控制通过反馈环节修正偏差。"},
+        {"role": "assistant", "content": "闭环控制通过测量输出修正偏差。"},
         {"role": "user", "content": "反馈环节有什么作用？"},
         {"role": "assistant", "content": "反馈环节用于比较输出和设定值。"}
       ],
