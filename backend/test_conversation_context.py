@@ -461,6 +461,47 @@ def test_rewriter_failure_for_complete_question_is_reported_as_fallback():
     assert result.metadata.fallback_used is True
 
 
+def test_qi_pronoun_fallback_respects_word_boundaries_and_possessives():
+    manager = ConversationContextManager(
+        summarizer=FakeSummarizer(),
+        query_rewriter=FailingQueryRewriter(),
+    )
+    history = [turn("user", "什么是 PID 控制？")]
+
+    for question in (
+        "其他控制方法有哪些？",
+        "其次需要考虑什么？",
+        "其实问题已经完整。",
+        "其它方法是否适用？",
+        "反馈因素尤其重要吗？",
+    ):
+        result = manager.process(
+            current_question=question,
+            history=history,
+            conversation_id="conversation-non-pronoun-qi",
+            options=ContextOptions(),
+        )
+        assert result.standalone_query == question
+        assert result.metadata.query_rewrite_status == "fallback"
+        assert result.metadata.fallback_used is True
+
+    expected_rewrites = {
+        "其作用是什么？": "PID 控制器的作用是什么？",
+        "请说明其参数如何影响响应。": "请说明PID 控制器的参数如何影响响应。",
+        "其对系统稳定性有什么影响？": "PID 控制器对系统稳定性有什么影响？",
+    }
+    for question, expected in expected_rewrites.items():
+        result = manager.process(
+            current_question=question,
+            history=history,
+            conversation_id="conversation-possessive-qi",
+            options=ContextOptions(),
+        )
+        assert result.standalone_query == expected
+        assert result.metadata.query_rewrite_status == "fallback"
+        assert result.metadata.fallback_used is True
+
+
 def test_chained_pronoun_fallback_keeps_parent_and_detail_topic():
     manager = ConversationContextManager(
         summarizer=FakeSummarizer(),

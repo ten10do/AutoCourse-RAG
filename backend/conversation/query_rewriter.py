@@ -10,6 +10,20 @@ from .models import (
 )
 
 
+QI_PRONOUN_PATTERN = (
+    r"(?<![尤与极何任听如])"
+    r"其"
+    r"(?![中他它次实余间后前一二三四五六七八九十])"
+)
+CONTEXT_REFERENCE_PATTERN = (
+    rf"(?:其中|(?<!其)它|{QI_PRONOUN_PATTERN}|"
+    r"该(?:概念|方法|过程|环节)?|上述|这个)"
+)
+QI_DIRECT_SUFFIX_PATTERN = (
+    r"^(?:对|在|与|由|会|将|可|能|是否|能否|如何|为何|为什么)"
+)
+
+
 class QueryRewriter(Protocol):
     def rewrite(
         self,
@@ -191,20 +205,38 @@ def deterministic_rewrite(
     summary: str = "",
 ) -> tuple[str, str]:
     question = normalize_message_text(current_question)
-    pronoun_pattern = r"(?:其中|它|其|该(?:概念|方法|过程|环节)?|上述|这个)"
-    if not re.search(pronoun_pattern, question):
+    if not re.search(CONTEXT_REFERENCE_PATTERN, question):
         return question[:max_chars], "unchanged"
 
     topic = _extract_recent_user_topic(recent_turns, summary)
     if not topic:
         return question[:max_chars], "unresolved"
 
+    qi_match = re.search(QI_PRONOUN_PATTERN, question)
     if question.startswith("其中"):
         remainder = question[len("其中") :]
         rewritten = f"{topic}中的{remainder}"
     elif question.startswith("它"):
         rewritten = topic + question[len("它") :]
+    elif qi_match:
+        suffix = question[qi_match.end() :]
+        connector = (
+            ""
+            if re.match(QI_DIRECT_SUFFIX_PATTERN, suffix)
+            else "的"
+        )
+        rewritten = (
+            question[: qi_match.start()]
+            + topic
+            + connector
+            + suffix
+        )
     else:
-        rewritten = re.sub(pronoun_pattern, topic, question, count=1)
+        rewritten = re.sub(
+            CONTEXT_REFERENCE_PATTERN,
+            topic,
+            question,
+            count=1,
+        )
 
     return normalize_standalone_query(rewritten, max_chars), "fallback"
