@@ -89,11 +89,43 @@ def _extract_topic(text: str) -> str:
         r"^请(?:介绍|说明|解释)(.+)$",
     ]
     topic = ""
-    for pattern in patterns:
-        match = re.match(pattern, text)
-        if match:
-            topic = match.group(1)
-            break
+    has_summary_markers = re.search(
+        r"(?:用户问题|讨论主题|当前讨论主题)\s*[:：]",
+        text,
+    )
+    if not has_summary_markers:
+        for pattern in patterns:
+            match = re.match(pattern, text)
+            if match:
+                topic = match.group(1)
+                break
+
+    if not topic:
+        summarized_questions = re.search(
+            r"(?:用户问题|问题)\s*[:：]\s*(.+)",
+            text,
+        )
+        summarized_topic = re.search(
+            r"(?:讨论主题|当前讨论主题)\s*[:：]\s*"
+            r"(.+?)(?=\s+用户问题\s*[:：]|[。；\n]|$)",
+            text,
+        )
+        if summarized_questions:
+            for question in reversed(
+                re.split(r"[；\n]", summarized_questions.group(1))
+            ):
+                for pattern in patterns:
+                    match = re.match(
+                        pattern,
+                        question.strip("？?。 "),
+                    )
+                    if match:
+                        topic = match.group(1)
+                        break
+                if topic:
+                    break
+        if not topic and summarized_topic:
+            topic = summarized_topic.group(1)
 
     if not topic:
         pid_match = re.search(r"PID\s*控制(?:器)?", text, re.IGNORECASE)
@@ -110,6 +142,19 @@ def _extract_topic(text: str) -> str:
     return topic[:120].strip()
 
 
+def _extract_followup_subject(text: str) -> str:
+    normalized = normalize_message_text(text).strip("？?。 ")
+    match = re.match(
+        r"^(?:其中|该|这个)(.+?)(?="
+        r"有什么|有何|为什么|为何|如何|怎么|会不会|是否|能否|"
+        r"可以|能够|对|的作用)",
+        normalized,
+    )
+    if not match:
+        return ""
+    return normalize_message_text(match.group(1)).strip("的 ")[:120]
+
+
 def _extract_recent_user_topic(
     turns: list[ConversationTurn],
     summary: str = "",
@@ -119,14 +164,11 @@ def _extract_recent_user_topic(
         for turn in turns
         if turn.role == "user"
     ]
-    detail = ""
-    if user_turns:
-        detail_match = re.search(
-            r"(积分项|积分环节|比例项|比例环节|微分项|微分环节)",
-            user_turns[-1],
-        )
-        if detail_match:
-            detail = detail_match.group(1)
+    detail = (
+        _extract_followup_subject(user_turns[-1])
+        if user_turns
+        else ""
+    )
 
     topic = ""
     for text in reversed(user_turns):
@@ -137,7 +179,7 @@ def _extract_recent_user_topic(
     if not topic:
         topic = _extract_topic(summary)
 
-    if detail and re.search(r"\bPID\b", topic, re.IGNORECASE):
+    if topic and detail and detail not in topic:
         return f"{topic}的{detail}"
     return topic
 

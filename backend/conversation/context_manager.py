@@ -63,6 +63,7 @@ class ConversationContextManager:
         context_limit_applied = len(limited_history) < history_turn_count
 
         summary = ""
+        deterministic_rewrite_summary = ""
         compressed_turn_count = 0
         compression_status = "not_needed"
         compression_fallback = False
@@ -71,48 +72,50 @@ class ConversationContextManager:
             "",
             limited_history,
         )
-        has_older_turns = (
-            options.enable_context_compression
-            and len(limited_history) > options.max_recent_turns
-        )
+        has_older_turns = len(limited_history) > options.max_recent_turns
 
         if has_older_turns:
             older_turns = limited_history[: -options.max_recent_turns]
             retained_turns = limited_history[-options.max_recent_turns :]
-            compressed_turn_count = len(older_turns)
-            summary_turns, summary_limit_applied = trim_turns_to_char_budget(
-                older_turns,
-                options.max_context_chars,
-            )
-            context_limit_applied = (
-                context_limit_applied or summary_limit_applied
-            )
-            if total_raw_size > options.compression_threshold:
-                try:
-                    summary = normalize_summary(
-                        self._summarizer.summarize(
-                            copy.deepcopy(summary_turns),
-                            MAX_SUMMARY_CHARS,
-                        ),
-                        MAX_SUMMARY_CHARS,
-                    )
-                except Exception:
-                    summary = ""
-                if summary:
-                    compression_status = "compressed"
-                else:
-                    summary = deterministic_summary(
-                        summary_turns,
-                        max_chars=MAX_SUMMARY_CHARS,
-                    )
-                    compression_status = "fallback"
-                    compression_fallback = True
-            else:
-                summary = deterministic_summary(
+            if options.enable_context_compression:
+                compressed_turn_count = len(older_turns)
+                (
+                    summary_turns,
+                    summary_limit_applied,
+                ) = trim_turns_to_char_budget(
+                    older_turns,
+                    options.max_context_chars,
+                )
+                deterministic_rewrite_summary = deterministic_summary(
                     summary_turns,
                     max_chars=MAX_SUMMARY_CHARS,
                 )
-                compression_status = "compressed"
+                context_limit_applied = (
+                    context_limit_applied or summary_limit_applied
+                )
+                if total_raw_size > options.compression_threshold:
+                    try:
+                        summary = normalize_summary(
+                            self._summarizer.summarize(
+                                copy.deepcopy(summary_turns),
+                                MAX_SUMMARY_CHARS,
+                            ),
+                            MAX_SUMMARY_CHARS,
+                        )
+                    except Exception:
+                        summary = ""
+                    if summary:
+                        compression_status = "compressed"
+                    else:
+                        summary = deterministic_rewrite_summary
+                        compression_status = "fallback"
+                        compression_fallback = True
+                else:
+                    summary = deterministic_rewrite_summary
+                    compression_status = "compressed"
+            else:
+                compression_status = "disabled"
+                context_limit_applied = True
         else:
             retained_turns = limited_history
             if not options.enable_context_compression:
@@ -162,7 +165,7 @@ class ConversationContextManager:
                     normalized_question,
                     retained_turns or limited_history,
                     max_chars=MAX_STANDALONE_QUERY_CHARS,
-                    summary=summary,
+                    summary=deterministic_rewrite_summary or summary,
                 )
                 if rewrite_failed and rewrite_status == "unchanged":
                     rewrite_status = "fallback"

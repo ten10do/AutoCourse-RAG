@@ -228,6 +228,40 @@ def test_max_recent_turns_is_a_hard_window_even_below_compression_threshold():
     assert result.metadata.summary_used is True
 
 
+def test_max_recent_turns_stays_hard_when_compression_is_disabled():
+    history = [
+        turn(
+            "user" if index % 2 == 0 else "assistant",
+            f"短消息 {index}",
+        )
+        for index in range(10)
+    ]
+    summarizer = FakeSummarizer()
+    manager = ConversationContextManager(
+        summarizer=summarizer,
+        query_rewriter=FakeQueryRewriter("完整问题"),
+    )
+
+    result = manager.process(
+        current_question="完整问题",
+        history=history,
+        conversation_id="conversation-disabled-hard-window",
+        options=ContextOptions(
+            max_recent_turns=6,
+            enable_context_compression=False,
+        ),
+    )
+
+    assert result.retained_turns == history[-6:]
+    assert result.metadata.retained_turn_count == 6
+    assert result.metadata.compressed_turn_count == 0
+    assert result.metadata.was_compressed is False
+    assert result.metadata.summary_used is False
+    assert result.metadata.compression_status == "disabled"
+    assert result.metadata.context_limit_applied is True
+    assert summarizer.calls == []
+
+
 def test_input_history_is_not_mutated_and_processing_is_deterministic():
     history = [
         turn("user", "  PLC   扫描周期包括哪些阶段？ \n"),
@@ -396,6 +430,18 @@ def test_unresolved_pronoun_does_not_invent_a_topic():
     assert result.standalone_query == "它为什么会这样？"
     assert result.metadata.query_rewrite_status == "unresolved"
 
+    contextual_only = manager.process(
+        current_question="它为什么影响稳定性？",
+        history=[
+            turn("user", "其中反馈环节有什么作用？"),
+            turn("assistant", "反馈环节用于修正偏差。"),
+        ],
+        conversation_id="conversation-contextual-only",
+        options=ContextOptions(),
+    )
+    assert contextual_only.standalone_query == "它为什么影响稳定性？"
+    assert contextual_only.metadata.query_rewrite_status == "unresolved"
+
 
 def test_rewriter_failure_for_complete_question_is_reported_as_fallback():
     question = "PID 控制器的积分项为什么会饱和？"
@@ -437,6 +483,88 @@ def test_chained_pronoun_fallback_keeps_parent_and_detail_topic():
     )
     assert result.metadata.query_rewrite_status == "fallback"
     assert result.metadata.fallback_used is True
+
+
+def test_generic_chained_pronoun_fallback_recovers_parent_and_recent_subject():
+    manager = ConversationContextManager(
+        summarizer=FakeSummarizer(),
+        query_rewriter=FailingQueryRewriter(),
+    )
+    cases = [
+        (
+            "什么是闭环控制？",
+            "闭环控制通过反馈修正偏差。",
+            "其中反馈环节有什么作用？",
+            "反馈环节用于比较输出和设定值。",
+            "它为什么影响稳定性？",
+            "闭环控制的反馈环节为什么影响稳定性？",
+        ),
+        (
+            "请介绍前馈控制。",
+            "前馈控制根据扰动提前补偿。",
+            "其中补偿环节有什么作用？",
+            "补偿环节用于抵消可测扰动。",
+            "它如何改善控制效果？",
+            "前馈控制的补偿环节如何改善控制效果？",
+        ),
+        (
+            "串级控制包括哪些环节？",
+            "串级控制包含主回路和副回路。",
+            "其中副回路有什么作用？",
+            "副回路用于快速抑制内环扰动。",
+            "它如何改善动态性能？",
+            "串级控制的副回路如何改善动态性能？",
+        ),
+    ]
+
+    for index, (
+        first_question,
+        first_answer,
+        subject_question,
+        subject_answer,
+        current_question,
+        expected,
+    ) in enumerate(cases):
+        history = [
+            turn("user", first_question),
+            turn("assistant", first_answer),
+            turn("user", subject_question),
+            turn("assistant", subject_answer),
+        ]
+        recent = manager.process(
+            current_question=current_question,
+            history=history,
+            conversation_id=f"conversation-generic-chain-{index}",
+            options=ContextOptions(),
+        )
+        compressed = manager.process(
+            current_question=current_question,
+            history=history,
+            conversation_id=f"conversation-generic-compressed-chain-{index}",
+            options=ContextOptions(
+                max_recent_turns=2,
+                compression_threshold=6000,
+            ),
+        )
+        llm_compressed = manager.process(
+            current_question=current_question,
+            history=history,
+            conversation_id=f"conversation-generic-llm-chain-{index}",
+            options=ContextOptions(
+                max_recent_turns=2,
+                compression_threshold=100,
+            ),
+        )
+
+        assert recent.standalone_query == expected
+        assert compressed.standalone_query == expected
+        assert llm_compressed.standalone_query == expected
+        assert recent.metadata.query_rewrite_status == "fallback"
+        assert compressed.metadata.query_rewrite_status == "fallback"
+        assert llm_compressed.metadata.query_rewrite_status == "fallback"
+        assert recent.metadata.fallback_used is True
+        assert compressed.metadata.fallback_used is True
+        assert llm_compressed.metadata.fallback_used is True
 
 
 def test_query_rewrite_can_be_disabled_and_output_is_bounded():
