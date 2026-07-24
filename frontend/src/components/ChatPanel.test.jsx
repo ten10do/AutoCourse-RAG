@@ -164,9 +164,13 @@ describe('multi-turn ChatPanel', () => {
     expect(details).not.toHaveAttribute('open')
     fireEvent.click(screen.getByText('上下文处理'))
     expect(
-      screen.getByText('PID 控制器中的积分项有什么作用？'),
+      screen.getByText('PID 控制器中的积分项有什么作用？', {
+        exact: false,
+      }),
     ).toBeInTheDocument()
     expect(screen.getByText('使用历史：2 条')).toBeInTheDocument()
+    expect(screen.getByText('保留原文：2 条')).toBeInTheDocument()
+    expect(screen.getByText('已压缩：0 条')).toBeInTheDocument()
   })
 
   it('keeps source rendering and tolerates a backend without conversation_context', async () => {

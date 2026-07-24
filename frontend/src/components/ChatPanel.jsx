@@ -45,25 +45,22 @@ function historyPayload(messages) {
   }))
 }
 
-function ContextDetails({ context, currentQuestion }) {
+function ContextDetails({ context }) {
   if (!context) return null
   return (
     <details className="context-details">
       <summary>上下文处理</summary>
       <dl>
-        {context.standalone_query !== currentQuestion && (
-          <div>
-            <dt>独立检索问题</dt>
-            <dd>{context.standalone_query}</dd>
-          </div>
-        )}
+        <div>
+          <dt>独立检索问题</dt>
+          <dd>改写结果：{context.standalone_query}</dd>
+        </div>
         <div>
           <dt>历史处理</dt>
-          <dd>
-            使用历史：{context.retained_turn_count} 条
-            {context.compressed_turn_count > 0
-              ? `，压缩 ${context.compressed_turn_count} 条`
-              : ''}
+          <dd className="context-counts">
+            <span>使用历史：{context.history_turn_count} 条</span>
+            <span>保留原文：{context.retained_turn_count} 条</span>
+            <span>已压缩：{context.compressed_turn_count} 条</span>
           </dd>
         </div>
         <div>
@@ -256,7 +253,7 @@ export default function ChatPanel({
           </div>
         )}
 
-        {messages.map((message, messageIndex) =>
+        {messages.map((message) =>
           message.role === 'user' ? (
             <div
               className="message-row user"
@@ -299,14 +296,7 @@ export default function ChatPanel({
                     )}
                   </div>
                 )}
-                <ContextDetails
-                  context={message.conversation_context}
-                  currentQuestion={
-                    messages
-                      .slice(0, messageIndex)
-                      .findLast((item) => item.role === 'user')?.content
-                  }
-                />
+                <ContextDetails context={message.conversation_context} />
               </article>
             </div>
           ),

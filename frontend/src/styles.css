@@ -777,6 +777,12 @@ textarea::placeholder {
   overflow-wrap: anywhere;
 }
 
+.context-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
 .conversation-error {
   display: flex;
   align-items: center;
