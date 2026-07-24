@@ -198,13 +198,27 @@ def generate_learning_content(task_type: str, provider: str = "Groq"):
     )
 
 
-def generate_answer(question: str, docs, provider: str = "Groq"):
+def generate_answer(
+    question: str,
+    docs,
+    provider: str = "Groq",
+    conversation_summary: str | None = None,
+    conversation_history: list[dict] | None = None,
+):
     if not question or not question.strip():
         raise ValueError("问题不能为空。")
 
     if not docs:
         raise ValueError("没有检索到参考资料，无法生成回答。")
 
+    if conversation_summary or conversation_history:
+        return generate_llm_answer(
+            question,
+            docs,
+            provider=provider,
+            conversation_summary=conversation_summary,
+            conversation_history=conversation_history,
+        )
     return generate_llm_answer(question, docs, provider=provider)
 
 

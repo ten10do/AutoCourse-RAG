@@ -7,8 +7,30 @@ const apiClient = axios.create({
   timeout: 300000,
 })
 
+function formatApiDetail(detail) {
+  if (typeof detail === 'string') return detail
+  if (!Array.isArray(detail)) return ''
+
+  return detail
+    .map((item) => {
+      if (typeof item === 'string') return item
+      if (!item || typeof item !== 'object') return ''
+      const location = Array.isArray(item.loc)
+        ? item.loc.filter((part) => part !== 'body').join('.')
+        : ''
+      const message = item.msg || item.message || ''
+      return location && message ? `${location}：${message}` : message
+    })
+    .filter(Boolean)
+    .join('；')
+}
+
 export function getApiErrorMessage(error, fallback = '请求失败，请稍后重试。') {
-  return error?.response?.data?.detail || error?.message || fallback
+  return (
+    formatApiDetail(error?.response?.data?.detail) ||
+    error?.message ||
+    fallback
+  )
 }
 
 export async function getHealth() {
@@ -24,11 +46,25 @@ export async function uploadPdfs(files) {
   return response.data
 }
 
-export async function askQuestion({ question, modelProvider, topK }) {
-  const response = await apiClient.post('/ask', {
+export async function askQuestion({
+  question,
+  modelProvider,
+  topK,
+  conversationId,
+  history,
+  contextOptions,
+}) {
+  const payload = {
     question,
     model_provider: modelProvider,
     top_k: topK,
+  }
+  if (conversationId) payload.conversation_id = conversationId
+  if (Array.isArray(history)) payload.history = history
+  if (contextOptions) payload.context_options = contextOptions
+
+  const response = await apiClient.post('/ask', {
+    ...payload,
   })
   return response.data
 }

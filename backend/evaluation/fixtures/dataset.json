@@ -35,6 +35,15 @@
         "PID 控制器由比例、积分和微分三个环节组成。比例作用对当前偏差快速响应；积分作用累积历史偏差，可以消除恒值扰动造成的稳态误差；微分作用反映偏差变化趋势，可增加阻尼并改善瞬态响应。",
         "执行器饱和时，积分项仍持续累积会产生积分饱和，导致退出饱和后恢复缓慢和较大超调。抗积分饱和可采用积分限幅或反计算方法。实际微分环节常加入低通滤波，以降低测量噪声被放大的风险。"
       ]
+    },
+    {
+      "source": "plc_scan_cycle.pdf",
+      "title": "PLC 扫描周期",
+      "keywords": ["PLC", "扫描周期", "输入采样", "程序执行", "输出刷新", "输入响应"],
+      "pages": [
+        "PLC 扫描周期通常依次包括输入采样、用户程序执行和输出刷新。输入采样阶段读取现场输入并写入输入映像区，程序执行阶段使用映像区数据运算，输出刷新阶段把输出映像区结果送往输出模块。",
+        "PLC 对输入信号的响应速度受扫描周期影响。输入信号若刚好错过输入采样，通常要等到下一扫描周期才能被读取；程序执行时间增长也会延长扫描周期和输入响应时间。高速信号可使用高速计数或中断功能。"
+      ]
     }
   ],
   "cases": [
@@ -139,6 +148,227 @@
       "expected_sources": [],
       "expected_keywords": [],
       "should_refuse": true
+    }
+  ],
+  "multi_turn_cases": [
+    {
+      "id": "multiturn-pid-integral",
+      "first_question": "PID 控制器由哪些环节组成？",
+      "first_answer": "PID 控制器由比例、积分和微分环节组成。",
+      "follow_up": "其中积分项有什么作用？",
+      "standalone_query": "PID 控制器中的积分项有什么作用？",
+      "required_query_terms": ["PID", "积分项"],
+      "expected_sources": ["pid_control.pdf"],
+      "expected_keywords": ["积分作用", "稳态误差"]
+    },
+    {
+      "id": "multiturn-plc-input-response",
+      "first_question": "PLC 扫描周期包括哪些阶段？",
+      "first_answer": "包括输入采样、程序执行和输出刷新。",
+      "follow_up": "它对输入响应有什么影响？",
+      "standalone_query": "PLC 扫描周期对输入响应有什么影响？",
+      "required_query_terms": ["PLC", "扫描周期", "输入响应"],
+      "expected_sources": ["plc_scan_cycle.pdf"],
+      "expected_keywords": ["扫描周期", "输入响应"]
+    }
+  ],
+  "fallback_cases": [
+    {
+      "id": "lexical-other",
+      "category": "lexical-boundary",
+      "history": [{"role": "user", "content": "什么是 PID 控制？"}],
+      "question": "其他控制方法有哪些？",
+      "expected_standalone_query": "其他控制方法有哪些？",
+      "expected_status": "fallback",
+      "expected_fallback_used": true
+    },
+    {
+      "id": "lexical-other-possessive",
+      "category": "lexical-boundary",
+      "history": [{"role": "user", "content": "什么是 PID 控制？"}],
+      "question": "其他的控制方式有哪些？",
+      "expected_standalone_query": "其他的控制方式有哪些？",
+      "expected_status": "fallback",
+      "expected_fallback_used": true
+    },
+    {
+      "id": "lexical-next",
+      "category": "lexical-boundary",
+      "history": [{"role": "user", "content": "什么是 PID 控制？"}],
+      "question": "其次还需要考虑哪些因素？",
+      "expected_standalone_query": "其次还需要考虑哪些因素？",
+      "expected_status": "fallback",
+      "expected_fallback_used": true
+    },
+    {
+      "id": "lexical-actually",
+      "category": "lexical-boundary",
+      "history": [{"role": "user", "content": "什么是 PID 控制？"}],
+      "question": "其实这种方法有什么限制？",
+      "expected_standalone_query": "其实这种方法有什么限制？",
+      "expected_status": "fallback",
+      "expected_fallback_used": true
+    },
+    {
+      "id": "lexical-remainder",
+      "category": "lexical-boundary",
+      "history": [{"role": "user", "content": "什么是 PID 控制？"}],
+      "question": "其余参数如何设置？",
+      "expected_standalone_query": "其余参数如何设置？",
+      "expected_status": "fallback",
+      "expected_fallback_used": true
+    },
+    {
+      "id": "lexical-during",
+      "category": "lexical-boundary",
+      "history": [{"role": "user", "content": "什么是 PID 控制？"}],
+      "question": "其间发生了哪些状态变化？",
+      "expected_standalone_query": "其间发生了哪些状态变化？",
+      "expected_status": "fallback",
+      "expected_fallback_used": true
+    },
+    {
+      "id": "lexical-other-comparison",
+      "category": "lexical-boundary",
+      "history": [{"role": "user", "content": "什么是 PID 控制？"}],
+      "question": "其他控制方法与 PID 控制相比有哪些区别？",
+      "expected_standalone_query": "其他控制方法与 PID 控制相比有哪些区别？",
+      "expected_status": "fallback",
+      "expected_fallback_used": true
+    },
+    {
+      "id": "lexical-unknown-term",
+      "category": "lexical-boundary",
+      "history": [{"role": "user", "content": "什么是 PID 控制？"}],
+      "question": "其他阿尔法结构有哪些？",
+      "expected_standalone_query": "其他阿尔法结构有哪些？",
+      "expected_status": "fallback",
+      "expected_fallback_used": true
+    },
+    {
+      "id": "lexical-currently",
+      "category": "lexical-boundary",
+      "history": [{"role": "user", "content": "什么是 PID 控制？"}],
+      "question": "目前常用的控制方法有哪些？",
+      "expected_standalone_query": "目前常用的控制方法有哪些？",
+      "expected_status": "fallback",
+      "expected_fallback_used": true
+    },
+    {
+      "id": "fallback-qi-effect",
+      "category": "deterministic-fallback",
+      "history": [{"role": "user", "content": "什么是 PID 控制？"}],
+      "question": "其作用是什么？",
+      "expected_standalone_query": "PID 控制器的作用是什么？",
+      "expected_status": "fallback",
+      "expected_fallback_used": true
+    },
+    {
+      "id": "fallback-qi-impact",
+      "category": "deterministic-fallback",
+      "history": [{"role": "user", "content": "PLC 扫描周期包括哪些阶段？"}],
+      "question": "其影响主要体现在哪些方面？",
+      "expected_standalone_query": "PLC 扫描周期的影响主要体现在哪些方面？",
+      "expected_status": "fallback",
+      "expected_fallback_used": true
+    },
+    {
+      "id": "fallback-unknown-principle",
+      "category": "deterministic-fallback",
+      "history": [{"role": "user", "content": "什么是矢量控制？"}],
+      "question": "其原理与标量控制有什么区别？",
+      "expected_standalone_query": "矢量控制的原理与标量控制有什么区别？",
+      "expected_status": "fallback",
+      "expected_fallback_used": true
+    },
+    {
+      "id": "fallback-qizhong",
+      "category": "deterministic-fallback",
+      "history": [{"role": "user", "content": "什么是 PID 控制？"}],
+      "question": "其中积分项有什么作用？",
+      "expected_standalone_query": "PID 控制器中的积分项有什么作用？",
+      "expected_status": "fallback",
+      "expected_fallback_used": true
+    },
+    {
+      "id": "fallback-ta",
+      "category": "deterministic-fallback",
+      "history": [{"role": "user", "content": "什么是闭环控制？"}],
+      "question": "它为什么能提高抗扰能力？",
+      "expected_standalone_query": "闭环控制为什么能提高抗扰能力？",
+      "expected_status": "fallback",
+      "expected_fallback_used": true
+    },
+    {
+      "id": "fallback-gai-segment",
+      "category": "deterministic-fallback",
+      "history": [{"role": "user", "content": "什么是电感式接近开关？"}],
+      "question": "该环节为什么受到金属目标影响？",
+      "expected_standalone_query": "电感式接近开关为什么受到金属目标影响？",
+      "expected_status": "fallback",
+      "expected_fallback_used": true
+    },
+    {
+      "id": "fallback-explicit-subtopic-no-assistant-echo",
+      "category": "deterministic-fallback",
+      "history": [
+        {"role": "user", "content": "闭环控制是什么？"},
+        {"role": "assistant", "content": "闭环控制通过测量输出修正偏差。"},
+        {"role": "user", "content": "反馈环节有什么作用？"},
+        {"role": "assistant", "content": "反馈环节用于比较输出和设定值。"}
+      ],
+      "question": "它为什么影响稳定性？",
+      "expected_standalone_query": "闭环控制的反馈环节为什么影响稳定性？",
+      "expected_status": "fallback",
+      "expected_fallback_used": true
+    },
+    {
+      "id": "fallback-cascade-chain",
+      "category": "deterministic-fallback",
+      "history": [
+        {"role": "user", "content": "串级控制包括哪些环节？"},
+        {"role": "assistant", "content": "串级控制包含主回路和副回路。"},
+        {"role": "user", "content": "其中副回路有什么作用？"},
+        {"role": "assistant", "content": "副回路用于快速抑制内环扰动。"}
+      ],
+      "question": "它如何提高抗扰能力？",
+      "expected_standalone_query": "串级控制的副回路如何提高抗扰能力？",
+      "expected_status": "fallback",
+      "expected_fallback_used": true
+    },
+    {
+      "id": "fallback-empty-history",
+      "category": "deterministic-fallback",
+      "history": [],
+      "question": "其作用是什么？",
+      "expected_standalone_query": "其作用是什么？",
+      "expected_status": "not_needed",
+      "expected_fallback_used": false
+    },
+    {
+      "id": "fallback-ambiguous-topics",
+      "category": "deterministic-fallback",
+      "history": [
+        {"role": "user", "content": "PID 控制有什么特点？"},
+        {"role": "assistant", "content": "PID 控制结合比例、积分和微分作用。"},
+        {"role": "user", "content": "PLC 扫描周期包括哪些阶段？"},
+        {"role": "assistant", "content": "包括输入采样、程序执行和输出刷新。"},
+        {"role": "user", "content": "变频器有哪些作用？"},
+        {"role": "assistant", "content": "变频器可以调节电机转速。"}
+      ],
+      "question": "其作用是什么？",
+      "expected_standalone_query": "其作用是什么？",
+      "expected_status": "unresolved",
+      "expected_fallback_used": true
+    },
+    {
+      "id": "fallback-complete-question",
+      "category": "deterministic-fallback",
+      "history": [{"role": "user", "content": "什么是 PID 控制？"}],
+      "question": "PID 控制器的积分项为什么会饱和？",
+      "expected_standalone_query": "PID 控制器的积分项为什么会饱和？",
+      "expected_status": "fallback",
+      "expected_fallback_used": true
     }
   ]
 }

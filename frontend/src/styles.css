@@ -599,6 +599,20 @@ textarea::placeholder {
   white-space: nowrap;
 }
 
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.secondary-button.compact {
+  min-height: 38px;
+  padding: 0 11px;
+  font-size: 0.78rem;
+}
+
 .chat-thread {
   display: grid;
   align-content: start;
@@ -726,6 +740,69 @@ textarea::placeholder {
   font-weight: 750;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.context-details {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.context-details summary {
+  color: var(--blue-dark);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.context-details dl {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+}
+
+.context-details dl div {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.context-details dt {
+  font-weight: 750;
+}
+
+.context-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.context-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.conversation-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.retry-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  color: #991b1b;
+  background: white;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  font-weight: 800;
 }
 
 .chat-composer {
