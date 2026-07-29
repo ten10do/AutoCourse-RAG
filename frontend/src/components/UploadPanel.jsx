@@ -11,6 +11,11 @@ export default function UploadPanel({
   onBuild,
   isUploading,
   feedback,
+  adminToken,
+  onAdminTokenChange,
+  onPublish,
+  isPublishing,
+  isManagementBusy,
 }) {
   const inputRef = useRef(null)
   const [isDragging, setIsDragging] = useState(false)
@@ -53,6 +58,19 @@ export default function UploadPanel({
         <UploadCloud size={18} aria-hidden="true" />
         <h2 id="upload-title">上传 PDF</h2>
       </div>
+
+      <label className="field-label" htmlFor="admin-token">
+        管理 Token
+      </label>
+      <input
+        id="admin-token"
+        className="admin-token-input"
+        type="password"
+        autoComplete="current-password"
+        value={adminToken}
+        onChange={(event) => onAdminTokenChange(event.target.value)}
+        placeholder="构建、清空或发布时必填"
+      />
 
       <div
         className={`upload-dropzone ${isDragging ? 'is-dragging' : ''}`}
@@ -112,11 +130,21 @@ export default function UploadPanel({
       <button
         className="button button-primary button-full"
         type="button"
-        disabled={isUploading || files.length === 0}
+        disabled={isManagementBusy || files.length === 0 || !adminToken.trim()}
         onClick={onBuild}
       >
         {isUploading ? <span className="spinner" aria-hidden="true" /> : <Database size={17} />}
-        {isUploading ? '正在构建...' : '构建知识库'}
+        {isUploading ? '正在构建...' : '构建草稿库'}
+      </button>
+
+      <button
+        className="button button-secondary button-full"
+        type="button"
+        disabled={isManagementBusy || !adminToken.trim()}
+        onClick={onPublish}
+      >
+        {isPublishing && <span className="spinner dark" aria-hidden="true" />}
+        {isPublishing ? '正在发布...' : '发布公共知识库'}
       </button>
 
       {feedback && (

@@ -304,7 +304,8 @@ a {
 }
 
 select,
-textarea {
+textarea,
+input[type="password"] {
   width: 100%;
   color: var(--ink);
   background: white;
@@ -315,12 +316,14 @@ textarea {
 }
 
 select:hover,
-textarea:hover {
+textarea:hover,
+input[type="password"]:hover {
   border-color: var(--blue-soft);
 }
 
 select:focus,
-textarea:focus {
+textarea:focus,
+input[type="password"]:focus {
   border-color: var(--blue);
   box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.12);
 }
@@ -328,6 +331,15 @@ textarea:focus {
 select {
   height: 42px;
   padding: 0 12px;
+}
+
+input[type="password"] {
+  height: 42px;
+  padding: 0 12px;
+}
+
+.admin-token-input {
+  margin-bottom: 14px;
 }
 
 textarea {
@@ -514,6 +526,203 @@ textarea::placeholder {
   font-size: 0.8rem;
 }
 
+.version-history-heading .icon-button {
+  margin-left: auto;
+}
+
+.version-history > .status-meta {
+  margin-left: 0;
+}
+
+.version-list {
+  display: grid;
+  gap: 10px;
+  max-height: 330px;
+  padding: 0;
+  margin: 12px 0 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.version-list li {
+  padding: 10px;
+  background: #f8fbff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.version-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.version-id {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.version-active {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  color: #0f766e;
+  background: #ccfbf1;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.version-list time,
+.version-list p {
+  display: block;
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.version-list .button {
+  margin-top: 9px;
+}
+
+.task-center-heading .icon-button {
+  margin-left: auto;
+}
+
+.task-center > .status-meta {
+  margin-left: 0;
+}
+
+.worker-status,
+.task-metrics,
+.task-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.worker-status {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.worker-online,
+.worker-offline {
+  font-weight: 700;
+}
+
+.worker-online {
+  color: #047857;
+}
+
+.worker-offline {
+  color: #b91c1c;
+}
+
+.task-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 9px;
+}
+
+.task-metrics span {
+  padding: 5px 7px;
+  color: var(--muted);
+  background: #f8fafc;
+  border-radius: 8px;
+  font-size: 0.68rem;
+}
+
+.task-list {
+  display: grid;
+  gap: 10px;
+  max-height: 390px;
+  padding: 0;
+  margin: 12px 0 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.task-list li {
+  padding: 10px;
+  background: #f8fbff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.task-row strong {
+  font-size: 0.78rem;
+}
+
+.task-status {
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.task-status.pending,
+.task-status.running {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.task-status.succeeded {
+  color: #047857;
+  background: #d1fae5;
+}
+
+.task-status.failed {
+  color: #b91c1c;
+  background: #fee2e2;
+}
+
+.task-list time,
+.task-list p,
+.task-trace {
+  display: block;
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.task-progress {
+  height: 5px;
+  margin-top: 8px;
+  overflow: hidden;
+  background: #dbeafe;
+  border-radius: 999px;
+}
+
+.task-progress span {
+  display: block;
+  height: 100%;
+  background: #2563eb;
+}
+
+.task-list .task-error,
+.task-list .task-warning {
+  color: #b91c1c;
+}
+
+.task-list .button {
+  margin-top: 8px;
+}
+
+.task-trace {
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .steps ol {
   display: grid;
   gap: 9px;
@@ -533,6 +742,10 @@ textarea::placeholder {
 
 .feedback-message.success {
   color: #047857;
+}
+
+.feedback-message.info {
+  color: #1d4ed8;
 }
 
 .feedback-message.error,

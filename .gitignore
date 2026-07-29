@@ -9,6 +9,9 @@ data/
 vector_db/
 backend/data/
 backend/vector_db/
+backend/light_indexes/
+backend/public_versions/
+backend/runtime_state/
 frontend/node_modules/
 frontend/dist/
 dist/

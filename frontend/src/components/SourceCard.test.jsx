@@ -9,6 +9,7 @@ describe('SourceCard', () => {
       <SourceCard
         index={0}
         source={{
+          citation_id: 'S1',
           source: 'course.pdf',
           page: 3,
           score: 9.25,
@@ -18,6 +19,7 @@ describe('SourceCard', () => {
     )
 
     expect(screen.getByText('course.pdf')).toBeInTheDocument()
+    expect(screen.getByText('[S1]')).toBeInTheDocument()
     expect(screen.getByText('第 3 页')).toBeInTheDocument()
     expect(screen.getByText('距离 9.2500')).toBeInTheDocument()
     expect(screen.getByText('PLC 扫描周期参考内容')).toBeInTheDocument()

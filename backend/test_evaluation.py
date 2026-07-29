@@ -14,12 +14,13 @@ class OfflineEvaluationTests(unittest.TestCase):
     def test_dataset_has_required_coverage(self):
         categories = [case["category"] for case in self.dataset["cases"]]
         self.assertEqual(len(self.dataset["documents"]), 5)
-        self.assertEqual(len(self.dataset["cases"]), 12)
+        self.assertEqual(len(self.dataset["cases"]), 13)
         self.assertEqual(len(self.dataset["multi_turn_cases"]), 2)
         self.assertEqual(len(self.dataset["fallback_cases"]), 20)
         self.assertEqual(categories.count("single-document"), 8)
         self.assertEqual(categories.count("cross-document"), 2)
         self.assertEqual(categories.count("out-of-scope"), 2)
+        self.assertEqual(categories.count("hard-paraphrase"), 1)
         fallback_categories = [
             case["category"]
             for case in self.dataset["fallback_cases"]
@@ -149,6 +150,11 @@ class OfflineEvaluationTests(unittest.TestCase):
     def test_repeated_runs_are_stable(self):
         self.assertTrue(self.report["stable"])
 
+    def test_threshold_calibration_reports_a_reproducible_candidate(self):
+        calibration = self.report["threshold_calibration"]
+        self.assertIsInstance(calibration["recommended_threshold"], float)
+        self.assertGreaterEqual(calibration["accuracy"], 0.80)
+
     def test_metric_math(self):
         cases = [
             {
@@ -231,23 +237,14 @@ class OfflineEvaluationTests(unittest.TestCase):
 
     def test_empty_knowledge_base_and_empty_question_fail_cleanly(self):
         light_rag_core = run._load_light_rag_core()
-        previous_state = (
-            light_rag_core._documents,
-            light_rag_core._vectorizer,
-            light_rag_core._tfidf_matrix,
-        )
+        previous_state = dict(light_rag_core._knowledge_bases)
         try:
-            light_rag_core._documents = []
-            light_rag_core._vectorizer = None
-            light_rag_core._tfidf_matrix = None
+            light_rag_core._knowledge_bases.clear()
             with self.assertRaises(ValueError):
                 light_rag_core.retrieve_docs("feedback")
         finally:
-            (
-                light_rag_core._documents,
-                light_rag_core._vectorizer,
-                light_rag_core._tfidf_matrix,
-            ) = previous_state
+            light_rag_core._knowledge_bases.clear()
+            light_rag_core._knowledge_bases.update(previous_state)
 
         with run.offline_knowledge_base(self.dataset) as (light_rag_core, _, _):
             with self.assertRaises(ValueError):
@@ -260,6 +257,10 @@ class OfflineEvaluationTests(unittest.TestCase):
             "chunk_count": 8,
             "stable": True,
             "gates_passed": False,
+            "threshold_calibration": {
+                "recommended_threshold": 0.5,
+                "accuracy": 1.0,
+            },
             "metrics": {
                 "hit_rate_at_1": 0.0,
                 "hit_rate_at_3": 0.0,

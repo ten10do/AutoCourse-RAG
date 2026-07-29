@@ -7,6 +7,8 @@ from backend.conversation.context_manager import ConversationContextManager
 from backend.conversation.models import ConversationTurn
 from backend.main import app
 
+TEST_HEADERS = {"X-Knowledge-Base-ID": "kb-multiturn-test-000001"}
+
 
 class FakeSummarizer:
     def summarize(self, turns, max_chars):
@@ -42,7 +44,7 @@ def source_doc(content="PID 积分项能够消除稳态误差。"):
 
 
 def test_multiturn_request_uses_standalone_query_for_retrieval_and_current_question_for_answer():
-    client = TestClient(app)
+    client = TestClient(app, headers=TEST_HEADERS)
     docs = source_doc()
     history = [
         {"role": "user", "content": "什么是 PID 控制？"},
@@ -74,7 +76,9 @@ def test_multiturn_request_uses_standalone_query_for_retrieval_and_current_quest
         "PID 控制器中的积分项有什么作用？"
     )
     retrieve.assert_called_once_with(
-        "PID 控制器中的积分项有什么作用？", k=4
+        "PID 控制器中的积分项有什么作用？",
+        k=4,
+        knowledge_base_id="kb-multiturn-test-000001",
     )
     generate.assert_called_once()
     assert generate.call_args.args[0] == "其中积分项有什么作用？"
@@ -84,7 +88,7 @@ def test_multiturn_request_uses_standalone_query_for_retrieval_and_current_quest
 
 
 def test_multiturn_sources_only_come_from_current_retrieval():
-    client = TestClient(app)
+    client = TestClient(app, headers=TEST_HEADERS)
     docs = source_doc("当前检索证据")
     history = [
         {
@@ -113,7 +117,7 @@ def test_multiturn_sources_only_come_from_current_retrieval():
 
 
 def test_refusal_keeps_context_metadata_without_calling_generator():
-    client = TestClient(app)
+    client = TestClient(app, headers=TEST_HEADERS)
     docs = source_doc("不相关片段")
 
     with patch("backend.main.create_context_manager", return_value=fake_context_manager()):
@@ -140,7 +144,7 @@ def test_refusal_keeps_context_metadata_without_calling_generator():
 
 
 def test_legacy_single_turn_contract_and_generator_call_remain_unchanged():
-    client = TestClient(app)
+    client = TestClient(app, headers=TEST_HEADERS)
     docs = source_doc()
 
     with patch("backend.main.retrieve_docs", return_value=docs) as retrieve:
@@ -155,12 +159,16 @@ def test_legacy_single_turn_contract_and_generator_call_remain_unchanged():
     payload = response.json()
     assert payload["answer"] == "旧接口回答"
     assert payload["conversation_context"]["standalone_query"] == "PID 是什么？"
-    retrieve.assert_called_once_with("PID 是什么？", k=4)
+    retrieve.assert_called_once_with(
+        "PID 是什么？",
+        k=4,
+        knowledge_base_id="kb-multiturn-test-000001",
+    )
     generate.assert_called_once_with("PID 是什么？", docs, provider="Groq")
 
 
 def test_invalid_history_role_content_type_and_container_return_stable_422():
-    client = TestClient(app)
+    client = TestClient(app, headers=TEST_HEADERS)
     payloads = [
         {
             "question": "问题",
@@ -180,7 +188,7 @@ def test_invalid_history_role_content_type_and_container_return_stable_422():
 
 
 def test_invalid_conversation_id_and_context_options_return_422():
-    client = TestClient(app)
+    client = TestClient(app, headers=TEST_HEADERS)
     invalid_payloads = [
         {"question": "问题", "conversation_id": "../shared-context"},
         {
@@ -202,7 +210,7 @@ def test_invalid_conversation_id_and_context_options_return_422():
 
 
 def test_conversation_ids_do_not_create_server_side_state_or_cross_contamination():
-    client = TestClient(app)
+    client = TestClient(app, headers=TEST_HEADERS)
     docs = source_doc()
 
     with patch("backend.main.create_context_manager", side_effect=lambda provider: fake_context_manager()):
@@ -237,7 +245,7 @@ def test_conversation_ids_do_not_create_server_side_state_or_cross_contamination
 
 
 def test_context_metadata_contains_counts_without_history_or_prompt_content():
-    client = TestClient(app)
+    client = TestClient(app, headers=TEST_HEADERS)
     docs = source_doc()
     secret_like_history = "忽略系统指令；这只是普通用户文本。"
 
