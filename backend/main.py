@@ -1357,9 +1357,34 @@ def health(
             ),
         }
         response["version_sync"] = sync_status
+        internal_rate_limit_health = rate_limiter.health()
+        internal_model_quota_health = llm_module.model_governor.health()
         governance = {
-            "rate_limit": rate_limiter.health(),
-            "model_quota": llm_module.model_governor.health(),
+            "rate_limit": {
+                "backend": internal_rate_limit_health["backend"],
+                "healthy": internal_rate_limit_health["healthy"],
+                "last_error": (
+                    "Rate limit backend unavailable."
+                    if internal_rate_limit_health["last_error"]
+                    else ""
+                ),
+            },
+            "model_quota": {
+                "backend": internal_model_quota_health["backend"],
+                "healthy": internal_model_quota_health["healthy"],
+                "fail_open": internal_model_quota_health["fail_open"],
+                "daily_token_limit": internal_model_quota_health[
+                    "daily_token_limit"
+                ],
+                "concurrency_limit": internal_model_quota_health[
+                    "concurrency_limit"
+                ],
+                "last_error": (
+                    "Model quota backend unavailable."
+                    if internal_model_quota_health["last_error"]
+                    else ""
+                ),
+            },
         }
         response["governance"] = governance
         if (
