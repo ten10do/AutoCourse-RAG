@@ -346,12 +346,16 @@ class LocalVersionStore:
         safe_name = os.path.basename(knowledge_base_id)
         if safe_name != knowledge_base_id:
             raise ValueError("Knowledge base ID must not contain a path.")
-        drafts_dir = self.drafts_dir.resolve()
-        path = (drafts_dir / safe_name).resolve()
-        if path.parent != drafts_dir:
-            raise ValueError("Knowledge base path escapes the drafts directory.")
-        if path.exists():
-            shutil.rmtree(path)
+        if not self.drafts_dir.exists():
+            return
+        for path in self.drafts_dir.iterdir():
+            if path.name != safe_name:
+                continue
+            if path.is_symlink():
+                raise ValueError("Knowledge base draft must not be a symlink.")
+            if path.is_dir():
+                shutil.rmtree(path)
+            return
 
 
 class S3VersionStore:
