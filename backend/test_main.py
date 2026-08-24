@@ -1084,6 +1084,35 @@ class FastApiBackendTests(unittest.TestCase):
                     origin,
                 )
 
+    def test_cors_allows_only_this_sites_netlify_deploy_previews(self):
+        allowed_origin = "https://deploy-preview-3--autocourse-rag.netlify.app"
+        rejected_origin = "https://deploy-preview-3--other-site.netlify.app"
+
+        allowed_response = self.client.options(
+            "/health",
+            headers={
+                "Origin": allowed_origin,
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        rejected_response = self.client.options(
+            "/health",
+            headers={
+                "Origin": rejected_origin,
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+
+        self.assertEqual(allowed_response.status_code, 200)
+        self.assertEqual(
+            allowed_response.headers["access-control-allow-origin"],
+            allowed_origin,
+        )
+        self.assertNotIn(
+            "access-control-allow-origin",
+            rejected_response.headers,
+        )
+
     def test_cors_allows_frontend_origin_from_environment(self):
         frontend_origin = "https://autocourse-rag.example.com"
 

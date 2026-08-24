@@ -217,6 +217,9 @@ LOCAL_FRONTEND_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 ]
+NETLIFY_DEPLOY_PREVIEW_ORIGIN_REGEX = (
+    r"^https://deploy-preview-[0-9]+--autocourse-rag\.netlify\.app$"
+)
 
 
 def get_allowed_origins():
@@ -246,6 +249,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_allowed_origins(),
+    allow_origin_regex=NETLIFY_DEPLOY_PREVIEW_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
