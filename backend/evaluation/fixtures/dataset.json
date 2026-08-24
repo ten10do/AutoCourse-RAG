@@ -112,6 +112,14 @@
       "should_refuse": false
     },
     {
+      "id": "hard-paraphrase-loop-gain",
+      "category": "hard-paraphrase",
+      "question": "为了提高控制精度，环路增益是否可以一直增大而不用考虑别的问题？",
+      "expected_sources": ["feedback_control_basics.pdf"],
+      "expected_keywords": ["环路增益", "稳态误差", "稳定裕度"],
+      "should_refuse": false
+    },
+    {
       "id": "cross-time-frequency",
       "category": "cross-document",
       "question": "请同时从阶跃响应超调量和频域相位裕度两个角度说明控制系统的动态性能与稳定裕度。",

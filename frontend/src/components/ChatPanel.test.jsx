@@ -185,7 +185,9 @@ describe('multi-turn ChatPanel', () => {
     await submitQuestion('完整问题')
 
     expect(await screen.findByText('兼容旧后端回答')).toBeInTheDocument()
-    expect(screen.getByText('pid.pdf · 第 2 页')).toBeInTheDocument()
+    expect(
+      screen.getByText('[S1] pid.pdf · 第 2 页'),
+    ).toBeInTheDocument()
     expect(screen.queryByText('上下文处理')).not.toBeInTheDocument()
   })
 

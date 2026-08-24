@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import argparse
 import importlib
 import json
 import math
 from contextlib import contextmanager
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import mock
 
 from backend.conversation.context_manager import ConversationContextManager
@@ -19,6 +21,7 @@ QUALITY_GATES = {
     "mrr": 0.70,
     "metadata_completeness": 1.00,
     "refusal_accuracy": 0.80,
+    "decision_accuracy": 0.85,
     "multi_turn_accuracy": 1.00,
     "deterministic_fallback_accuracy": 1.00,
     "lexical_boundary_accuracy": 1.00,
@@ -245,27 +248,26 @@ def offline_knowledge_base(dataset: dict):
     documents_by_source = {
         document["source"]: document for document in dataset["documents"]
     }
-    previous_state = (
-        light_rag_core._documents,
-        light_rag_core._vectorizer,
-        light_rag_core._tfidf_matrix,
-    )
+    previous_state = dict(light_rag_core._knowledge_bases)
     reader_factory = lambda path: _FixturePdfReader(path, documents_by_source)
 
     try:
-        with mock.patch.object(
-            light_rag_core, "PdfReader", side_effect=reader_factory
-        ):
-            page_count, chunk_count = light_rag_core.build_knowledge_base(
-                [Path(source) for source in documents_by_source]
-            )
-        yield light_rag_core, page_count, chunk_count
+        with TemporaryDirectory() as temp_dir:
+            with mock.patch.object(
+                light_rag_core,
+                "DATA_DIR",
+                Path(temp_dir) / "data",
+            ):
+                with mock.patch.object(
+                    light_rag_core, "PdfReader", side_effect=reader_factory
+                ):
+                    page_count, chunk_count = light_rag_core.build_knowledge_base(
+                        [Path(source) for source in documents_by_source]
+                    )
+                yield light_rag_core, page_count, chunk_count
     finally:
-        (
-            light_rag_core._documents,
-            light_rag_core._vectorizer,
-            light_rag_core._tfidf_matrix,
-        ) = previous_state
+        light_rag_core._knowledge_bases.clear()
+        light_rag_core._knowledge_bases.update(previous_state)
 
 
 def _normalize_result(document, score: float) -> dict:
@@ -490,6 +492,39 @@ def calculate_metrics(cases: list[dict], case_results: list[dict]) -> dict:
     }
 
 
+def calibrate_relevance_threshold(
+    cases: list[dict],
+    case_results: list[dict],
+) -> dict:
+    labels_and_scores = []
+    for case, result in zip(cases, case_results):
+        if not result["results"]:
+            continue
+        labels_and_scores.append(
+            (
+                not case["should_refuse"],
+                float(result["results"][0]["score"]),
+            )
+        )
+    if not labels_and_scores:
+        return {"recommended_threshold": None, "accuracy": 0.0}
+
+    scores = sorted({score for _, score in labels_and_scores})
+    candidates = [0.0, *scores, 1.0]
+    ranked = []
+    for threshold in candidates:
+        correct = sum(
+            (score <= threshold) == should_accept
+            for should_accept, score in labels_and_scores
+        )
+        ranked.append((correct / len(labels_and_scores), threshold))
+    accuracy, threshold = max(ranked, key=lambda item: (item[0], -item[1]))
+    return {
+        "recommended_threshold": threshold,
+        "accuracy": accuracy,
+    }
+
+
 def evaluate_once(dataset: dict, top_k: int = 3) -> dict:
     case_results = []
     with offline_knowledge_base(dataset) as (
@@ -571,6 +606,10 @@ def evaluate_once(dataset: dict, top_k: int = 3) -> dict:
         "multi_turn_results": multi_turn_results,
         "fallback_results": fallback_results,
         "metrics": metrics,
+        "threshold_calibration": calibrate_relevance_threshold(
+            dataset["cases"],
+            case_results,
+        ),
     }
 
 
@@ -647,8 +686,18 @@ def quality_gates_pass(report: dict) -> bool:
     )
 
 
-def main() -> int:
-    report = run_evaluation()
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Run deterministic light-RAG retrieval evaluation.",
+    )
+    parser.add_argument(
+        "--dataset",
+        type=Path,
+        default=DATASET_PATH,
+        help="Path to a production-like evaluation dataset JSON file.",
+    )
+    args = parser.parse_args(list(argv or []))
+    report = run_evaluation(args.dataset)
     metrics = report["metrics"]
     print(
         "Offline RAG evaluation: "
@@ -667,6 +716,12 @@ def main() -> int:
     )
     print(f"Refusal accuracy: {metrics['refusal_accuracy']:.3f}")
     print(f"Relevance decision accuracy: {metrics['decision_accuracy']:.3f}")
+    calibration = report["threshold_calibration"]
+    print(
+        "Recommended light distance threshold: "
+        f"{calibration['recommended_threshold']:.4f} "
+        f"(calibration accuracy {calibration['accuracy']:.3f})"
+    )
     print(
         "Multi-turn follow-up accuracy: "
         f"{metrics.get('multi_turn_accuracy', 0.0):.3f}"
@@ -685,4 +740,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import sys
+
+    raise SystemExit(main(sys.argv[1:]))

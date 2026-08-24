@@ -1,7 +1,10 @@
+import hashlib
 import os
 import shutil
+from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import PyPDFLoader
@@ -9,8 +12,10 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 if __package__:
+    from .learning_content import generate_hierarchical_learning_content
     from .llm_client import generate_llm_answer
 else:
+    from learning_content import generate_hierarchical_learning_content
     from llm_client import generate_llm_answer
 
 
@@ -23,6 +28,7 @@ EMPTY_KNOWLEDGE_BASE_MESSAGE = "请先上传 PDF 并构建知识库。"
 
 # Chroma 在当前 Embedding 配置下返回原始距离值，数值越小表示越相关。
 MAX_RELEVANT_DISTANCE = 20.0
+DEFAULT_MAX_KNOWLEDGE_BASE_CHUNKS = 240
 
 
 def load_pdf(file_path: str | os.PathLike):
@@ -63,38 +69,111 @@ def split_documents(documents):
     return chunks
 
 
+def get_data_dir(knowledge_base_id: str = "default") -> Path:
+    return DATA_DIR if knowledge_base_id == "default" else DATA_DIR / knowledge_base_id
+
+
+def get_persist_dir(knowledge_base_id: str = "default") -> Path:
+    return (
+        PERSIST_DIR
+        if knowledge_base_id == "default"
+        else PERSIST_DIR / knowledge_base_id
+    )
+
+
+def get_index_storage_path(knowledge_base_id: str = "default") -> Path:
+    return get_persist_dir(knowledge_base_id)
+
+
+def reload_knowledge_base(knowledge_base_id: str = "default") -> bool:
+    if not is_knowledge_base_ready(knowledge_base_id):
+        return False
+    try:
+        vector_db = load_vector_db(knowledge_base_id)
+        vector_db.get(limit=1)
+        del vector_db
+        return True
+    except Exception:
+        return False
+
+
+@lru_cache(maxsize=1)
 def get_embedding_model():
     return HuggingFaceEmbeddings(
         model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     )
 
 
-def build_vector_db(chunks):
+def build_vector_db(chunks, persist_dir: Path | None = None):
     if not chunks:
         raise ValueError("chunks 为空，无法建立向量数据库。")
 
     return Chroma.from_documents(
         documents=chunks,
         embedding=get_embedding_model(),
-        persist_directory=str(PERSIST_DIR)
+        persist_directory=str(persist_dir or PERSIST_DIR)
     )
 
 
-def load_vector_db():
-    if not PERSIST_DIR.exists():
+def _max_knowledge_base_chunks() -> int:
+    try:
+        value = int(
+            os.getenv(
+                "MAX_KNOWLEDGE_BASE_CHUNKS",
+                str(DEFAULT_MAX_KNOWLEDGE_BASE_CHUNKS),
+            )
+        )
+    except ValueError:
+        return DEFAULT_MAX_KNOWLEDGE_BASE_CHUNKS
+    return value if value > 0 else DEFAULT_MAX_KNOWLEDGE_BASE_CHUNKS
+
+
+def load_vector_db(knowledge_base_id: str = "default"):
+    persist_dir = get_persist_dir(knowledge_base_id)
+    if not persist_dir.exists():
         raise ValueError(EMPTY_KNOWLEDGE_BASE_MESSAGE)
 
     return Chroma(
-        persist_directory=str(PERSIST_DIR),
+        persist_directory=str(persist_dir),
         embedding_function=get_embedding_model()
     )
 
 
-def is_knowledge_base_ready():
-    return PERSIST_DIR.exists() and any(PERSIST_DIR.iterdir())
+def is_knowledge_base_ready(knowledge_base_id: str = "default"):
+    persist_dir = get_persist_dir(knowledge_base_id)
+    return persist_dir.exists() and any(persist_dir.iterdir())
 
 
-def build_knowledge_base(pdf_paths):
+def _serialize_chunks(chunks) -> list[dict]:
+    return [
+        {
+            "page_content": chunk.page_content,
+            "metadata": dict(chunk.metadata),
+        }
+        for chunk in chunks
+    ]
+
+
+def _deserialize_chunks(payload):
+    from langchain_core.documents import Document
+
+    return [
+        Document(
+            page_content=item["page_content"],
+            metadata=dict(item["metadata"]),
+        )
+        for item in payload
+        if item.get("page_content")
+    ]
+
+
+def build_knowledge_base_incremental(
+    pdf_paths,
+    knowledge_base_id: str = "default",
+    *,
+    previous_index_path=None,
+    previous_cache: dict | None = None,
+):
     if isinstance(pdf_paths, (str, os.PathLike)):
         pdf_paths = [pdf_paths]
     else:
@@ -103,31 +182,175 @@ def build_knowledge_base(pdf_paths):
     if not pdf_paths:
         raise ValueError("请先上传 PDF 文件。")
 
-    all_documents = []
     all_chunks = []
+    files_cache = {}
+    previous_files = (
+        previous_cache.get("files", {})
+        if previous_cache
+        and previous_cache.get("schema_version") == 1
+        and previous_cache.get("rag_mode") == "full"
+        else {}
+    )
+    reused_file_count = 0
+    changed_files = set()
 
-    for path in pdf_paths:
-        documents = load_pdf(path)
-        if not documents:
-            raise ValueError(
-                f"没有从 {Path(path).name} 中读取到有效文字。请使用文字版 PDF。"
-            )
-
-        chunks = split_documents(documents)
-        all_documents.extend(documents)
+    for value in pdf_paths:
+        path = Path(value)
+        digest_source = (
+            path.read_bytes()
+            if path.exists()
+            else str(path).encode("utf-8")
+        )
+        digest = hashlib.sha256(digest_source).hexdigest()
+        cached = previous_files.get(path.name, {})
+        if (
+            cached.get("sha256") == digest
+            and cached.get("documents")
+            and cached.get("ids")
+        ):
+            chunks = _deserialize_chunks(cached["documents"])
+            ids = list(cached["ids"])
+            reused_file_count += 1
+        else:
+            documents = load_pdf(path)
+            if not documents:
+                raise ValueError(
+                    f"没有从 {path.name} 中读取到有效文字。"
+                    "请使用文字版 PDF。"
+                )
+            chunks = split_documents(documents)
+            ids = [
+                hashlib.sha256(
+                    f"{path.name}:{digest}:{index}".encode("utf-8")
+                ).hexdigest()
+                for index in range(len(chunks))
+            ]
+            changed_files.add(path.name)
         all_chunks.extend(chunks)
+        files_cache[path.name] = {
+            "sha256": digest,
+            "ids": ids,
+            "documents": _serialize_chunks(chunks),
+        }
 
-    clear_vector_db()
-    build_vector_db(all_chunks)
+    if len(all_chunks) > _max_knowledge_base_chunks():
+        raise ValueError(
+            "课程资料切分后的文本块数量超过限制 "
+            f"{_max_knowledge_base_chunks()}。"
+        )
 
-    return len(all_documents), len(all_chunks)
+    persist_dir = get_persist_dir(knowledge_base_id)
+    persist_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging_dir = persist_dir.with_name(
+        f".{persist_dir.name}.staging-{uuid4().hex}"
+    )
+    backup_dir = persist_dir.with_name(
+        f".{persist_dir.name}.backup-{uuid4().hex}"
+    )
+    try:
+        can_update = (
+            previous_index_path
+            and Path(previous_index_path).exists()
+            and previous_files
+        )
+        if can_update:
+            shutil.copytree(previous_index_path, staging_dir)
+            vector_db = Chroma(
+                persist_directory=str(staging_dir),
+                embedding_function=get_embedding_model(),
+            )
+            removed_or_changed = (
+                set(previous_files) - set(files_cache)
+            ) | changed_files
+            removed_ids = [
+                item_id
+                for filename in removed_or_changed
+                for item_id in previous_files.get(filename, {}).get(
+                    "ids",
+                    [],
+                )
+            ]
+            if removed_ids:
+                vector_db.delete(ids=removed_ids)
+            changed_chunks = []
+            changed_ids = []
+            for filename in changed_files:
+                changed_chunks.extend(
+                    _deserialize_chunks(
+                        files_cache[filename]["documents"]
+                    )
+                )
+                changed_ids.extend(files_cache[filename]["ids"])
+            if changed_chunks:
+                vector_db.add_documents(
+                    documents=changed_chunks,
+                    ids=changed_ids,
+                )
+        else:
+            all_ids = [
+                item_id
+                for filename in files_cache
+                for item_id in files_cache[filename]["ids"]
+            ]
+            vector_db = Chroma.from_documents(
+                documents=all_chunks,
+                ids=all_ids,
+                embedding=get_embedding_model(),
+                persist_directory=str(staging_dir),
+            )
+        del vector_db
+        if persist_dir.exists():
+            os.replace(persist_dir, backup_dir)
+        os.replace(staging_dir, persist_dir)
+        if backup_dir.exists():
+            shutil.rmtree(backup_dir)
+    except Exception:
+        if persist_dir.exists() and backup_dir.exists():
+            shutil.rmtree(persist_dir)
+        if backup_dir.exists():
+            os.replace(backup_dir, persist_dir)
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
+        raise
+
+    page_count = len(
+        {
+            (
+                chunk.metadata.get("source"),
+                chunk.metadata.get("page"),
+            )
+            for chunk in all_chunks
+        }
+    )
+    cache = {
+        "schema_version": 1,
+        "rag_mode": "full",
+        "files": files_cache,
+    }
+    stats = {
+        "reused_file_count": reused_file_count,
+        "parsed_file_count": len(pdf_paths) - reused_file_count,
+        "updated_vector_file_count": len(changed_files),
+        "removed_vector_file_count": len(
+            set(previous_files) - set(files_cache)
+        ),
+    }
+    return page_count, len(all_chunks), cache, stats
 
 
-def retrieve_docs(question: str, k: int = 4):
+def build_knowledge_base(pdf_paths, knowledge_base_id: str = "default"):
+    page_count, chunk_count, _, _ = build_knowledge_base_incremental(
+        pdf_paths,
+        knowledge_base_id,
+    )
+    return page_count, chunk_count
+
+
+def retrieve_docs(question: str, k: int = 4, knowledge_base_id: str = "default"):
     if not question or not question.strip():
         raise ValueError("问题不能为空。")
 
-    vector_db = load_vector_db()
+    vector_db = load_vector_db(knowledge_base_id)
     return vector_db.similarity_search_with_score(question, k=k)
 
 
@@ -135,14 +358,34 @@ def has_relevant_docs(scored_docs):
     if not scored_docs:
         return False
 
-    return scored_docs[0][1] <= MAX_RELEVANT_DISTANCE
+    return bool(filter_relevant_docs(scored_docs))
 
 
-def get_representative_docs(k: int = 8):
-    vector_db = load_vector_db()
+def get_relevance_threshold() -> float:
+    try:
+        return float(
+            os.getenv(
+                "FULL_MAX_RELEVANT_DISTANCE",
+                str(MAX_RELEVANT_DISTANCE),
+            )
+        )
+    except ValueError:
+        return MAX_RELEVANT_DISTANCE
+
+
+def filter_relevant_docs(scored_docs):
+    threshold = get_relevance_threshold()
+    return [
+        (document, score)
+        for document, score in scored_docs
+        if score <= threshold
+    ]
+
+
+def get_all_docs(knowledge_base_id: str = "default"):
+    vector_db = load_vector_db(knowledge_base_id)
     result = vector_db.get(
         include=["documents", "metadatas"],
-        limit=k
     )
 
     documents = result.get("documents", [])
@@ -158,6 +401,10 @@ def get_representative_docs(k: int = 8):
         representative_docs.append((doc, 0.0))
 
     return representative_docs
+
+
+def get_representative_docs(k: int = 8, knowledge_base_id: str = "default"):
+    return get_all_docs(knowledge_base_id)[:k]
 
 
 def get_learning_task_prompt(task_type: str):
@@ -186,15 +433,20 @@ def get_learning_task_prompt(task_type: str):
     return prompts[task_type]
 
 
-def generate_learning_content(task_type: str, provider: str = "Groq"):
-    docs = get_representative_docs()
+def generate_learning_content(
+    task_type: str,
+    provider: str = "Groq",
+    knowledge_base_id: str = "default",
+):
+    docs = get_all_docs(knowledge_base_id)
     if not docs:
         raise ValueError(EMPTY_KNOWLEDGE_BASE_MESSAGE)
 
-    return generate_llm_answer(
+    return generate_hierarchical_learning_content(
         get_learning_task_prompt(task_type),
         docs,
-        provider=provider
+        provider,
+        generate_llm_answer,
     )
 
 
@@ -222,18 +474,18 @@ def generate_answer(
     return generate_llm_answer(question, docs, provider=provider)
 
 
-def clear_vector_db():
-    if PERSIST_DIR.exists():
-        shutil.rmtree(PERSIST_DIR)
+def clear_vector_db(knowledge_base_id: str = "default"):
+    persist_dir = get_persist_dir(knowledge_base_id)
+    if persist_dir.exists():
+        shutil.rmtree(persist_dir)
 
 
-def clear_data_dir():
-    if DATA_DIR.exists():
-        shutil.rmtree(DATA_DIR)
+def clear_data_dir(knowledge_base_id: str = "default"):
+    data_dir = get_data_dir(knowledge_base_id)
+    if data_dir.exists():
+        shutil.rmtree(data_dir)
 
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-
-def clear_knowledge_base():
-    clear_vector_db()
-    clear_data_dir()
+def clear_knowledge_base(knowledge_base_id: str = "default"):
+    clear_vector_db(knowledge_base_id)
+    clear_data_dir(knowledge_base_id)

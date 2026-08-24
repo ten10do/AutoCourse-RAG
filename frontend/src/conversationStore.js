@@ -39,11 +39,13 @@ export function createEmptyConversationState(
 
 function normalizeSource(source) {
   if (!source || typeof source !== 'object') return null
-  return {
+  const normalized = {
     source: String(source.source || ''),
     page: Number(source.page || 0),
     score: Number(source.score || 0),
   }
+  if (source.citation_id) normalized.citation_id = String(source.citation_id)
+  return normalized
 }
 
 function normalizeMessage(message) {

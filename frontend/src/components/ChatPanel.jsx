@@ -292,7 +292,8 @@ export default function ChatPanel({
                       <span
                         key={`${source.source}-${source.page}-${index}`}
                       >
-                        {source.source} · 第 {source.page} 页
+                        [{source.citation_id || `S${index + 1}`}] {source.source}
+                        {' · '}第 {source.page} 页
                       </span>
                     ))}
                     {message.sources.length > 3 && (

@@ -1,4 +1,8 @@
 import axios from 'axios'
+import {
+  getKnowledgeBaseId,
+  getPublicKnowledgeBaseId,
+} from './knowledgeBaseStore'
 
 const apiClient = axios.create({
   baseURL:
@@ -6,6 +10,37 @@ const apiClient = axios.create({
     (import.meta.env.DEV ? 'http://localhost:8000' : '/api'),
   timeout: 300000,
 })
+
+function scopedRequestConfig(
+  config = {},
+  knowledgeBaseId = getPublicKnowledgeBaseId(),
+) {
+  return {
+    ...config,
+    headers: {
+      ...config.headers,
+      'X-Knowledge-Base-ID': knowledgeBaseId,
+    },
+  }
+}
+
+function managementRequestConfig(adminToken, idempotencyKey = '') {
+  const headers = {
+    'X-Admin-Token': String(adminToken || '').trim(),
+  }
+  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey
+  return scopedRequestConfig(
+    { headers },
+    getKnowledgeBaseId(),
+  )
+}
+
+export function createIdempotencyKey() {
+  return (
+    globalThis.crypto?.randomUUID?.() ||
+    `${Date.now()}-${Math.random().toString(36).slice(2, 18)}`
+  )
+}
 
 function formatApiDetail(detail) {
   if (typeof detail === 'string') return detail
@@ -34,15 +69,23 @@ export function getApiErrorMessage(error, fallback = '请求失败，请稍后�
 }
 
 export async function getHealth() {
-  const response = await apiClient.get('/health')
+  const response = await apiClient.get('/health', scopedRequestConfig())
   return response.data
 }
 
-export async function uploadPdfs(files) {
+export async function uploadPdfs(
+  files,
+  adminToken,
+  idempotencyKey = createIdempotencyKey(),
+) {
   const formData = new FormData()
   files.forEach((file) => formData.append('files', file))
 
-  const response = await apiClient.post('/upload', formData)
+  const response = await apiClient.post(
+    '/upload',
+    formData,
+    managementRequestConfig(adminToken, idempotencyKey),
+  )
   return response.data
 }
 
@@ -63,9 +106,13 @@ export async function askQuestion({
   if (Array.isArray(history)) payload.history = history
   if (contextOptions) payload.context_options = contextOptions
 
-  const response = await apiClient.post('/ask', {
-    ...payload,
-  })
+  const response = await apiClient.post(
+    '/ask',
+    {
+      ...payload,
+    },
+    scopedRequestConfig(),
+  )
   return response.data
 }
 
@@ -81,13 +128,85 @@ export async function generateStudyContent(taskType, modelProvider) {
     throw new Error('不支持的学习辅助类型。')
   }
 
-  const response = await apiClient.post(route, {
-    model_provider: modelProvider,
-  })
+  const response = await apiClient.post(
+    route,
+    {
+      model_provider: modelProvider,
+    },
+    scopedRequestConfig(),
+  )
   return response.data
 }
 
-export async function resetKnowledgeBase() {
-  const response = await apiClient.post('/reset')
+export async function resetKnowledgeBase(adminToken) {
+  const response = await apiClient.post(
+    '/reset',
+    undefined,
+    managementRequestConfig(adminToken),
+  )
+  return response.data
+}
+
+export async function publishKnowledgeBase(
+  adminToken,
+  idempotencyKey = createIdempotencyKey(),
+) {
+  const response = await apiClient.post(
+    '/publish',
+    undefined,
+    managementRequestConfig(adminToken, idempotencyKey),
+  )
+  return response.data
+}
+
+export async function getKnowledgeBaseVersions(adminToken) {
+  const response = await apiClient.get(
+    '/versions',
+    managementRequestConfig(adminToken),
+  )
+  return response.data
+}
+
+export async function rollbackKnowledgeBaseVersion(
+  versionId,
+  adminToken,
+  idempotencyKey = createIdempotencyKey(),
+) {
+  const response = await apiClient.post(
+    `/versions/${encodeURIComponent(versionId)}/rollback`,
+    undefined,
+    managementRequestConfig(adminToken, idempotencyKey),
+  )
+  return response.data
+}
+
+export async function getKnowledgeBaseJob(jobId, adminToken) {
+  const response = await apiClient.get(
+    `/jobs/${encodeURIComponent(jobId)}`,
+    managementRequestConfig(adminToken),
+  )
+  return response.data
+}
+
+export async function getKnowledgeBaseJobs(adminToken, limit = 50) {
+  const config = managementRequestConfig(adminToken)
+  config.params = { limit }
+  const response = await apiClient.get(
+    '/jobs',
+    config,
+  )
+  return response.data
+}
+
+export async function retryKnowledgeBaseJob(
+  jobId,
+  adminToken,
+  idempotencyKey = createIdempotencyKey(),
+) {
+  const response = await apiClient.post(
+    `/jobs/${encodeURIComponent(jobId)}/retry`,
+    undefined,
+    managementRequestConfig(adminToken, idempotencyKey),
+  )
   return response.data
 }

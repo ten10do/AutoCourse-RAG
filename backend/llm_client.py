@@ -1,15 +1,163 @@
 import os
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+if __package__:
+    from .model_governance import (
+        create_model_governor,
+        current_model_scope,
+    )
+else:
+    from model_governance import (
+        create_model_governor,
+        current_model_scope,
+    )
 
 
 GROQ_MODEL = "llama-3.1-8b-instant"
 DEEPSEEK_MODEL = "deepseek-chat"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+CITATION_PATTERN = re.compile(r"\[S(\d+)\]")
+DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS = 60.0
+DEFAULT_MODEL_MAX_RETRIES = 1
+DEFAULT_MODEL_MAX_OUTPUT_TOKENS = 2048
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT_DIR / ".env")
+model_governor = create_model_governor()
+
+
+def get_model_client_options() -> dict:
+    try:
+        timeout = float(
+            os.getenv(
+                "MODEL_REQUEST_TIMEOUT_SECONDS",
+                str(DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS),
+            )
+        )
+    except ValueError:
+        timeout = DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS
+    try:
+        max_retries = int(
+            os.getenv(
+                "MODEL_MAX_RETRIES",
+                str(DEFAULT_MODEL_MAX_RETRIES),
+            )
+        )
+    except ValueError:
+        max_retries = DEFAULT_MODEL_MAX_RETRIES
+    return {
+        "timeout": timeout if timeout > 0 else DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS,
+        "max_retries": max_retries if max_retries >= 0 else DEFAULT_MODEL_MAX_RETRIES,
+    }
+
+
+def get_model_max_output_tokens() -> int:
+    try:
+        value = int(
+            os.getenv(
+                "MODEL_MAX_OUTPUT_TOKENS",
+                str(DEFAULT_MODEL_MAX_OUTPUT_TOKENS),
+            )
+        )
+    except ValueError:
+        value = DEFAULT_MODEL_MAX_OUTPUT_TOKENS
+    return value if value > 0 else DEFAULT_MODEL_MAX_OUTPUT_TOKENS
+
+
+def estimate_token_reservation(messages: list[dict]) -> int:
+    input_chars = sum(
+        len(str(message.get("content", "")))
+        for message in messages
+    )
+    return input_chars + get_model_max_output_tokens()
+
+
+def response_total_tokens(response) -> int | None:
+    usage = getattr(response, "usage", None)
+    total_tokens = getattr(usage, "total_tokens", None)
+    if total_tokens is None:
+        return None
+    try:
+        return max(0, int(total_tokens))
+    except (TypeError, ValueError):
+        return None
+
+
+def create_governed_completion(
+    provider: str,
+    messages: list[dict],
+    *,
+    temperature: float,
+):
+    if provider == "Groq":
+        from groq import Groq
+
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key:
+            raise ValueError("没有找到 GROQ_API_KEY，请检查运行环境。")
+        client = Groq(api_key=api_key, **get_model_client_options())
+        model = GROQ_MODEL
+    elif provider == "DeepSeek":
+        from openai import OpenAI
+
+        api_key = os.getenv("DEEPSEEK_API_KEY")
+        if not api_key:
+            raise ValueError("没有找到 DEEPSEEK_API_KEY，请检查运行环境。")
+        client = OpenAI(
+            api_key=api_key,
+            base_url=DEEPSEEK_BASE_URL,
+            **get_model_client_options(),
+        )
+        model = DEEPSEEK_MODEL
+    else:
+        raise ValueError("不支持的大模型服务，请选择 Groq 或 DeepSeek。")
+
+    scope, state = current_model_scope()
+    reservation, decision = model_governor.begin(
+        scope,
+        estimate_token_reservation(messages),
+    )
+    if decision is not None:
+        state["quota"] = {
+            "limit": decision.limit,
+            "remaining": decision.remaining,
+            "reset_after": decision.reset_after,
+        }
+    succeeded = False
+    actual_tokens = None
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=get_model_max_output_tokens(),
+        )
+        actual_tokens = response_total_tokens(response)
+        if actual_tokens is not None:
+            state["used_tokens"] += actual_tokens
+        succeeded = True
+        return response.choices[0].message.content
+    finally:
+        model_governor.finish(
+            reservation,
+            actual_tokens=actual_tokens,
+            succeeded=succeeded,
+        )
+        if (
+            succeeded
+            and decision is not None
+            and actual_tokens is not None
+            and actual_tokens < reservation.reserved_tokens
+        ):
+            state["quota"]["remaining"] = min(
+                decision.limit,
+                state["quota"]["remaining"]
+                + reservation.reserved_tokens
+                - actual_tokens,
+            )
 
 
 def build_prompt(
@@ -18,12 +166,16 @@ def build_prompt(
     conversation_summary: str | None = None,
     conversation_history: list[dict] | None = None,
 ):
-    context = "\n\n".join(
-        [
-            f"参考片段 {i + 1}：\n{doc.page_content}"
-            for i, (doc, score) in enumerate(docs)
-        ]
-    )
+    context_parts = []
+    for i, (doc, score) in enumerate(docs):
+        metadata = getattr(doc, "metadata", {}) or {}
+        source = Path(str(metadata.get("source", "未知来源"))).name
+        page = metadata.get("page")
+        page_label = f"，第 {page + 1} 页" if isinstance(page, int) else ""
+        context_parts.append(
+            f"[S{i + 1}] 来源：{source}{page_label}\n{doc.page_content}"
+        )
+    context = "\n\n".join(context_parts)
 
     conversation_parts = []
     if conversation_summary:
@@ -69,6 +221,7 @@ def build_prompt(
 4. 如果涉及自动控制、PLC、传感器、电机等内容，请尽量结合自动化专业背景说明
 5. 回答尽量条理清晰
 6. 历史助手回答不能替代本轮参考资料
+7. 对资料中的事实使用 [S1]、[S2] 形式标注依据，只能引用上面实际存在的编号
 """
 
 
@@ -95,32 +248,42 @@ def build_messages(
     ]
 
 
+def ensure_valid_citations(answer: str, docs) -> str:
+    normalized = (answer or "").strip()
+    valid_ids = {str(index) for index in range(1, len(docs) + 1)}
+    valid_citations = {
+        citation
+        for citation in CITATION_PATTERN.findall(normalized)
+        if citation in valid_ids
+    }
+    normalized = CITATION_PATTERN.sub(
+        lambda match: match.group(0) if match.group(1) in valid_ids else "",
+        normalized,
+    ).strip()
+    if valid_ids and not valid_citations:
+        fallback_ids = " ".join(
+            f"[S{index}]" for index in range(1, min(len(docs), 3) + 1)
+        )
+        normalized = f"{normalized}\n\n参考依据：{fallback_ids}".strip()
+    return normalized
+
+
 def generate_with_groq(
     question: str,
     docs,
     conversation_summary: str | None = None,
     conversation_history: list[dict] | None = None,
 ):
-    from groq import Groq
-
-    api_key = os.getenv("GROQ_API_KEY")
-
-    if not api_key:
-        raise ValueError("没有找到 GROQ_API_KEY，请检查 .env 文件。")
-
-    client = Groq(api_key=api_key)
-    response = client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=build_messages(
+    return create_governed_completion(
+        "Groq",
+        build_messages(
             question,
             docs,
             conversation_summary=conversation_summary,
             conversation_history=conversation_history,
         ),
-        temperature=0.2
+        temperature=0.2,
     )
-
-    return response.choices[0].message.content
 
 
 def generate_with_deepseek(
@@ -129,29 +292,16 @@ def generate_with_deepseek(
     conversation_summary: str | None = None,
     conversation_history: list[dict] | None = None,
 ):
-    from openai import OpenAI
-
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-
-    if not api_key:
-        raise ValueError("没有找到 DEEPSEEK_API_KEY，请检查 .env 文件。")
-
-    client = OpenAI(
-        api_key=api_key,
-        base_url=DEEPSEEK_BASE_URL
-    )
-    response = client.chat.completions.create(
-        model=DEEPSEEK_MODEL,
-        messages=build_messages(
+    return create_governed_completion(
+        "DeepSeek",
+        build_messages(
             question,
             docs,
             conversation_summary=conversation_summary,
             conversation_history=conversation_history,
         ),
-        temperature=0.2
+        temperature=0.2,
     )
-
-    return response.choices[0].message.content
 
 
 def generate_llm_answer(
@@ -162,20 +312,22 @@ def generate_llm_answer(
     conversation_history: list[dict] | None = None,
 ):
     if provider == "Groq":
-        return generate_with_groq(
+        answer = generate_with_groq(
             question,
             docs,
             conversation_summary=conversation_summary,
             conversation_history=conversation_history,
         )
+        return ensure_valid_citations(answer, docs)
 
     if provider == "DeepSeek":
-        return generate_with_deepseek(
+        answer = generate_with_deepseek(
             question,
             docs,
             conversation_summary=conversation_summary,
             conversation_history=conversation_history,
         )
+        return ensure_valid_citations(answer, docs)
 
     raise ValueError("不支持的大模型服务，请选择 Groq 或 DeepSeek。")
 
@@ -192,32 +344,8 @@ def generate_context_text(prompt: str, provider: str = "Groq"):
         {"role": "user", "content": prompt},
     ]
 
-    if provider == "Groq":
-        from groq import Groq
-
-        api_key = os.getenv("GROQ_API_KEY")
-        if not api_key:
-            raise ValueError("没有找到 GROQ_API_KEY，请检查运行环境。")
-        client = Groq(api_key=api_key)
-        response = client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=messages,
-            temperature=0.0,
-        )
-        return response.choices[0].message.content
-
-    if provider == "DeepSeek":
-        from openai import OpenAI
-
-        api_key = os.getenv("DEEPSEEK_API_KEY")
-        if not api_key:
-            raise ValueError("没有找到 DEEPSEEK_API_KEY，请检查运行环境。")
-        client = OpenAI(api_key=api_key, base_url=DEEPSEEK_BASE_URL)
-        response = client.chat.completions.create(
-            model=DEEPSEEK_MODEL,
-            messages=messages,
-            temperature=0.0,
-        )
-        return response.choices[0].message.content
-
-    raise ValueError("不支持的大模型服务，请选择 Groq 或 DeepSeek。")
+    return create_governed_completion(
+        provider,
+        messages,
+        temperature=0.0,
+    )

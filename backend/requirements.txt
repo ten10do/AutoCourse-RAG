@@ -7,3 +7,6 @@ scikit-learn
 numpy
 groq
 openai
+boto3
+redis
+rq
