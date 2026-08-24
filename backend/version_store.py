@@ -343,9 +343,19 @@ class LocalVersionStore:
 
     def delete_draft(self, knowledge_base_id: str) -> None:
         knowledge_base_id = validate_knowledge_base_id(knowledge_base_id)
-        path = self.drafts_dir / knowledge_base_id
-        if path.exists():
-            shutil.rmtree(path)
+        safe_name = os.path.basename(knowledge_base_id)
+        if safe_name != knowledge_base_id:
+            raise ValueError("Knowledge base ID must not contain a path.")
+        if not self.drafts_dir.exists():
+            return
+        for path in self.drafts_dir.iterdir():
+            if path.name != safe_name:
+                continue
+            if path.is_symlink():
+                raise ValueError("Knowledge base draft must not be a symlink.")
+            if path.is_dir():
+                shutil.rmtree(path)
+            return
 
 
 class S3VersionStore:

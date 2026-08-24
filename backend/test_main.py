@@ -175,6 +175,44 @@ class FastApiBackendTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["version_sync"], sync_status)
 
+    def test_public_health_redacts_version_sync_errors(self):
+        client = TestClient(
+            app,
+            headers={
+                "X-Knowledge-Base-ID": TEST_PUBLIC_KNOWLEDGE_BASE_ID,
+            },
+        )
+        sync_status = {
+            "status": "degraded",
+            "remote_active_version": "version-2",
+            "loaded_version": "version-1",
+            "last_checked_at": "2026-07-28T08:00:00+00:00",
+            "last_success_at": "",
+            "last_error": "download failed at /srv/private/version.zip",
+        }
+        with patch.object(
+            main_module,
+            "ensure_public_version_current",
+        ):
+            with patch.object(
+                main_module,
+                "get_knowledge_base_status",
+                return_value=(True, 2),
+            ):
+                with patch.object(
+                    main_module.public_version_synchronizer,
+                    "status",
+                    return_value=sync_status,
+                ):
+                    response = client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["version_sync"]["last_error"],
+            "Version synchronization failed.",
+        )
+        self.assertNotIn("/srv/private", response.text)
+
     def test_publish_endpoint_promotes_the_current_draft(self):
         record = {
             "job_id": "job-" + "a" * 32,
