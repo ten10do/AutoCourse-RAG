@@ -1,6 +1,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from backend.version_store import (
     LocalVersionStore,
@@ -76,6 +77,25 @@ def version_manifest(version_id, created_at):
 
 
 class VersionStoreTests(unittest.TestCase):
+    def test_local_store_delete_draft_stays_inside_drafts_directory(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "store"
+            outside = root / "outside"
+            (root / "drafts").mkdir(parents=True)
+            outside.mkdir()
+            marker = outside / "keep.txt"
+            marker.write_text("keep", encoding="utf-8")
+            store = LocalVersionStore(root)
+
+            with patch(
+                "backend.version_store.validate_knowledge_base_id",
+                return_value="../outside",
+            ):
+                with self.assertRaises(ValueError):
+                    store.delete_draft("kb-backend-test-00000001")
+
+            self.assertTrue(marker.exists())
+
     def test_local_store_saves_immutable_versions_and_active_pointer(self):
         with TemporaryDirectory() as temp_dir:
             store = LocalVersionStore(Path(temp_dir))

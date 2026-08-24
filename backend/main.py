@@ -1341,7 +1341,21 @@ def health(
         "pdf_count": pdf_count,
     }
     if knowledge_base_id == PUBLIC_KNOWLEDGE_BASE_ID:
-        sync_status = public_version_synchronizer.status()
+        internal_sync_status = public_version_synchronizer.status()
+        sync_status = {
+            "status": internal_sync_status["status"],
+            "remote_active_version": internal_sync_status[
+                "remote_active_version"
+            ],
+            "loaded_version": internal_sync_status["loaded_version"],
+            "last_checked_at": internal_sync_status["last_checked_at"],
+            "last_success_at": internal_sync_status["last_success_at"],
+            "last_error": (
+                "Version synchronization failed."
+                if internal_sync_status["last_error"]
+                else ""
+            ),
+        }
         response["version_sync"] = sync_status
         governance = {
             "rate_limit": rate_limiter.health(),
