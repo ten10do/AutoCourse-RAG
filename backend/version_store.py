@@ -343,7 +343,13 @@ class LocalVersionStore:
 
     def delete_draft(self, knowledge_base_id: str) -> None:
         knowledge_base_id = validate_knowledge_base_id(knowledge_base_id)
-        path = self.drafts_dir / knowledge_base_id
+        safe_name = os.path.basename(knowledge_base_id)
+        if safe_name != knowledge_base_id:
+            raise ValueError("Knowledge base ID must not contain a path.")
+        drafts_dir = self.drafts_dir.resolve()
+        path = (drafts_dir / safe_name).resolve()
+        if path.parent != drafts_dir:
+            raise ValueError("Knowledge base path escapes the drafts directory.")
         if path.exists():
             shutil.rmtree(path)
 
