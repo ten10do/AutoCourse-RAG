@@ -68,10 +68,24 @@ class FastApiBackendTests(unittest.TestCase):
             },
         )
 
-    def test_scoped_routes_require_a_valid_knowledge_base_id(self):
-        response = TestClient(app).get("/health")
-        self.assertEqual(response.status_code, 422)
+    def test_health_defaults_to_the_public_knowledge_base(self):
+        client = TestClient(app)
+        with patch.object(
+            main_module,
+            "ensure_public_version_current",
+        ) as ensure_current:
+            with patch.object(
+                main_module,
+                "get_knowledge_base_status",
+                return_value=(False, 0),
+            ) as get_status:
+                response = client.get("/health")
 
+        self.assertEqual(response.status_code, 200)
+        ensure_current.assert_called_once_with(TEST_PUBLIC_KNOWLEDGE_BASE_ID)
+        get_status.assert_called_once_with(TEST_PUBLIC_KNOWLEDGE_BASE_ID)
+
+    def test_scoped_routes_require_a_valid_knowledge_base_id(self):
         response = TestClient(
             app,
             headers={"X-Knowledge-Base-ID": "shared"},

@@ -398,6 +398,17 @@ def require_knowledge_base_id(
     return value
 
 
+def resolve_health_knowledge_base_id(
+    value: Annotated[
+        str | None,
+        Header(alias="X-Knowledge-Base-ID"),
+    ] = None,
+) -> str:
+    if value is None:
+        return PUBLIC_KNOWLEDGE_BASE_ID
+    return require_knowledge_base_id(value)
+
+
 def require_management_token(
     value: Annotated[
         str | None,
@@ -1319,7 +1330,7 @@ def run_study_task(
 @app.get("/health")
 def health(
     request: Request,
-    knowledge_base_id: str = Depends(require_knowledge_base_id),
+    knowledge_base_id: str = Depends(resolve_health_knowledge_base_id),
 ):
     enforce_rate_limit(request, knowledge_base_id, "health")
     ensure_public_version_current(knowledge_base_id)
