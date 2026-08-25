@@ -38,6 +38,8 @@ flowchart LR
 
 - Render Free 实例可能自动休眠，首次访问时响应速度可能较慢。
 - 当前线上后端使用 `RAG_MODE=light`，避免 Chroma、Sentence Transformers 和 PyTorch 超出免费实例内存限制。
+- API 限流与模型 Token 配额使用同区域的 Render Free Key Value（Valkey）共享计数；免费实例重启时计数会清空，因此它只承担可丢失的协调状态。
+- 当前仍使用 `TASK_QUEUE_BACKEND=memory`。Render Background Worker 没有免费实例，在配置独立 Worker 前不应把任务切到 Redis 队列，否则任务会进入队列但无人消费。
 - 未配置 S3 兼容存储时，上传资料、草稿和公共版本仍保存在实例本地目录；Render 临时磁盘不保证长期持久。
 - 服务重启或数据丢失后，用户可以重新上传 PDF 并构建知识库。
 - 本地完整版仍支持 `RAG_MODE=full`，使用 Chroma + HuggingFace Embeddings 完成向量检索。
@@ -54,6 +56,7 @@ flowchart LR
 | 检索与向量化 | TF-IDF、scikit-learn、HuggingFace Embeddings、Sentence Transformers |
 | 知识库存储 | 轻量内存知识库、Chroma |
 | 大模型服务 | Groq API、DeepSeek API、OpenAI-compatible API |
+| 共享协调状态 | Redis / Valkey（限流、模型配额、可选任务队列） |
 | 测试与评测 | pytest、unittest、FastAPI TestClient、Vitest、Testing Library、离线 RAG 评测 |
 | CI/CD 与部署 | GitHub Actions、Netlify、Render Free Web Service |
 
