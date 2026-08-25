@@ -367,6 +367,7 @@ class S3VersionStore:
         prefix: str = "autocourse-rag/public",
         endpoint_url: str | None = None,
         region_name: str | None = None,
+        force_path_style: bool = False,
         client=None,
     ):
         if not bucket:
@@ -376,14 +377,21 @@ class S3VersionStore:
         if client is None:
             try:
                 import boto3
+                from botocore.config import Config
             except ImportError as exc:
                 raise RuntimeError(
                     "S3 版本存储需要安装 boto3。"
                 ) from exc
+            config = (
+                Config(s3={"addressing_style": "path"})
+                if force_path_style
+                else None
+            )
             client = boto3.client(
                 "s3",
                 endpoint_url=endpoint_url or None,
                 region_name=region_name or None,
+                config=config,
             )
         self.client = client
 
@@ -693,6 +701,10 @@ def create_version_store(base_dir: Path):
                 "PUBLIC_VERSION_S3_REGION",
                 "",
             ).strip(),
+            force_path_style=os.getenv(
+                "PUBLIC_VERSION_S3_FORCE_PATH_STYLE",
+                "false",
+            ).strip().lower() in {"1", "true", "yes", "on"},
         )
     raise RuntimeError(
         "PUBLIC_VERSION_STORAGE_BACKEND 只支持 local 或 s3。"
