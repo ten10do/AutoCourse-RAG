@@ -680,6 +680,15 @@ def create_version_store(base_dir: Path):
         "PUBLIC_VERSION_STORAGE_BACKEND",
         "local",
     ).strip().lower()
+    require_persistent = os.getenv(
+        "REQUIRE_PERSISTENT_VERSION_STORAGE",
+        "false",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if require_persistent and backend != "s3":
+        raise RuntimeError(
+            "REQUIRE_PERSISTENT_VERSION_STORAGE requires "
+            "PUBLIC_VERSION_STORAGE_BACKEND=s3."
+        )
     if backend == "local":
         configured = os.getenv("PUBLIC_VERSION_STORAGE_DIR", "").strip()
         root = Path(configured) if configured else base_dir / "public_versions"

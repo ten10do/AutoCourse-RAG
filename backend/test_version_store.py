@@ -215,6 +215,7 @@ class VersionStoreTests(unittest.TestCase):
         botocore_module.config = botocore_config_module
         environment = {
             "PUBLIC_VERSION_STORAGE_BACKEND": "s3",
+            "REQUIRE_PERSISTENT_VERSION_STORAGE": "true",
             "PUBLIC_VERSION_S3_BUCKET": "course-bucket",
             "PUBLIC_VERSION_S3_ENDPOINT_URL": "https://storage.example/s3",
             "PUBLIC_VERSION_S3_REGION": "test-region",
@@ -242,6 +243,18 @@ class VersionStoreTests(unittest.TestCase):
             call.kwargs["config"].s3,
             {"addressing_style": "path"},
         )
+
+    def test_persistent_storage_guard_rejects_local_backend(self):
+        environment = {
+            "PUBLIC_VERSION_STORAGE_BACKEND": "local",
+            "REQUIRE_PERSISTENT_VERSION_STORAGE": "true",
+        }
+        with patch.dict(os.environ, environment, clear=False):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "PUBLIC_VERSION_STORAGE_BACKEND=s3",
+            ):
+                create_version_store(Path("unused"))
 
     def test_pdf_bundle_round_trip_checks_expected_files_and_size(self):
         with TemporaryDirectory() as temp_dir:

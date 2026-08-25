@@ -173,7 +173,16 @@ class FastApiBackendTests(unittest.TestCase):
                     response = client.get("/health")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["version_sync"], sync_status)
+        self.assertEqual(
+            response.json()["version_sync"],
+            {
+                "storage_backend": main_module.version_store.backend_name,
+                "persistent": (
+                    main_module.version_store.backend_name == "s3"
+                ),
+                **sync_status,
+            },
+        )
 
     def test_public_health_redacts_version_sync_errors(self):
         client = TestClient(

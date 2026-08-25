@@ -1,0 +1,57 @@
+name: Production Smoke
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-smoke
+  cancel-in-progress: true
+
+jobs:
+  health:
+    name: Verify production persistence
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check production health after cold start
+        env:
+          HEALTH_URL: https://autocourse-rag-backend.onrender.com/health
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if curl --fail --silent --show-error \
+              --max-time 90 "$HEALTH_URL" -o health.json; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 10
+          done
+
+          python - <<'PY'
+          import json
+
+          with open("health.json", encoding="utf-8") as stream:
+              health = json.load(stream)
+
+          sync = health.get("version_sync", {})
+          governance = health.get("governance", {})
+          remote = sync.get("remote_active_version", "")
+          loaded = sync.get("loaded_version", "")
+
+          assert health.get("status") == "ok", health
+          assert health.get("knowledge_base_ready") is True, health
+          assert health.get("pdf_count", 0) >= 1, health
+          assert sync.get("storage_backend") == "s3", health
+          assert sync.get("persistent") is True, health
+          assert sync.get("status") == "synchronized", health
+          assert remote and loaded == remote, health
+          assert governance.get("rate_limit", {}).get("healthy") is True, health
+          assert governance.get("model_quota", {}).get("healthy") is True, health
+          PY
