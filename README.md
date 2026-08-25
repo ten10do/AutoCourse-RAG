@@ -44,6 +44,8 @@ flowchart LR
 - 服务重启或数据丢失后，用户可以重新上传 PDF 并构建知识库。
 - 本地完整版仍支持 `RAG_MODE=full`，使用 Chroma + HuggingFace Embeddings 完成向量检索。
 
+严格零付费部署可使用 Supabase Free Storage 保存公共版本：免费项目提供 1 GB 存储，超出配额后限制服务而不是自动产生超额账单。Supabase 的 S3 接口要求 path-style 地址，因此需要设置 `PUBLIC_VERSION_S3_FORCE_PATH_STYLE=true`。线上 `light` 模式还应把 `MAX_INDEX_SNAPSHOT_BYTES` 控制在 50 MB 单文件限制以内；当前建议值为 `47185920`（45 MB），并保留 5 MB 安全余量。独立 Render Background Worker 没有免费实例，所以零付费方案继续使用进程内 Worker。
+
 ## 技术栈
 
 | 层级 | 技术 |
@@ -446,6 +448,7 @@ PUBLIC_VERSION_S3_BUCKET=
 PUBLIC_VERSION_S3_PREFIX=autocourse-rag/public
 PUBLIC_VERSION_S3_ENDPOINT_URL=
 PUBLIC_VERSION_S3_REGION=
+PUBLIC_VERSION_S3_FORCE_PATH_STYLE=false
 AWS_ACCESS_KEY_ID=
 AWS_SECRET_ACCESS_KEY=
 FRONTEND_ORIGIN=http://localhost:5173
@@ -493,7 +496,7 @@ LEARNING_MAX_BATCHES=8
 
 `ASK_RATE_LIMIT`、`HEALTH_RATE_LIMIT` 和 `JOB_STATUS_RATE_LIMIT` 的窗口为 60 秒；学习、上传、重置、发布、版本列表、任务重试和回滚限额的窗口为 1 小时。模型超时和重试配置会同时应用于回答生成、对话摘要与查询改写。前后端的公共知识库 ID 必须一致；前端可通过 `VITE_PUBLIC_KNOWLEDGE_BASE_ID` 覆盖默认值。修改这些环境变量后需要重启或重新构建对应服务。
 
-本地开发保持 `PUBLIC_VERSION_STORAGE_BACKEND=local` 即可；`PUBLIC_VERSION_STORAGE_DIR` 为空时使用 `backend/public_versions/`。Render 等临时磁盘环境应改为 `s3`，并配置 bucket、前缀、endpoint、region 以及标准 AWS 访问密钥。Cloudflare R2 和 MinIO 使用各自的 S3 endpoint；原始 PDF 以 ZIP 版本包持久化，索引在发布、回滚或启动恢复时按当前 RAG 模式重建，避免把特定向量库格式锁死在版本文件中。
+本地开发保持 `PUBLIC_VERSION_STORAGE_BACKEND=local` 即可；`PUBLIC_VERSION_STORAGE_DIR` 为空时使用 `backend/public_versions/`。Render 等临时磁盘环境应改为 `s3`，并配置 bucket、前缀、endpoint、region 以及标准 AWS 访问密钥。Supabase Storage 还需要设置 `PUBLIC_VERSION_S3_FORCE_PATH_STYLE=true`；AWS S3 等使用默认虚拟主机地址的服务保持 `false`。原始 PDF 以 ZIP 版本包持久化，索引在发布、回滚或启动恢复时按当前 RAG 模式重建，避免把特定向量库格式锁死在版本文件中。
 
 本地开发保持 `TASK_QUEUE_BACKEND=memory` 即可。生产环境设置 `TASK_QUEUE_BACKEND=redis` 和 `REDIS_URL`，Web 服务继续使用 Uvicorn，另启一个使用相同代码、环境变量和 S3 配置的 Worker：
 

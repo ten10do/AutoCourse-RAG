@@ -1,12 +1,16 @@
+import os
 from pathlib import Path
+import sys
 from tempfile import TemporaryDirectory
+from types import ModuleType
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from backend.version_store import (
     LocalVersionStore,
     S3VersionStore,
     create_pdf_bundle,
+    create_version_store,
     extract_pdf_bundle,
     sha256_hex,
 )
@@ -194,6 +198,50 @@ class VersionStoreTests(unittest.TestCase):
         )
         store.delete_task_input(job_id)
         store.delete_draft(draft_id)
+
+    def test_s3_store_supports_path_style_endpoints(self):
+        client = FakeS3Client()
+        create_client = Mock(return_value=client)
+        boto3_module = ModuleType("boto3")
+        boto3_module.client = create_client
+        botocore_module = ModuleType("botocore")
+        botocore_config_module = ModuleType("botocore.config")
+
+        class FakeConfig:
+            def __init__(self, *, s3):
+                self.s3 = s3
+
+        botocore_config_module.Config = FakeConfig
+        botocore_module.config = botocore_config_module
+        environment = {
+            "PUBLIC_VERSION_STORAGE_BACKEND": "s3",
+            "PUBLIC_VERSION_S3_BUCKET": "course-bucket",
+            "PUBLIC_VERSION_S3_ENDPOINT_URL": "https://storage.example/s3",
+            "PUBLIC_VERSION_S3_REGION": "test-region",
+            "PUBLIC_VERSION_S3_FORCE_PATH_STYLE": "true",
+        }
+
+        modules = {
+            "boto3": boto3_module,
+            "botocore": botocore_module,
+            "botocore.config": botocore_config_module,
+        }
+        with patch.dict(sys.modules, modules):
+            with patch.dict(os.environ, environment, clear=False):
+                store = create_version_store(Path("unused"))
+
+        self.assertIsInstance(store, S3VersionStore)
+        call = create_client.call_args
+        self.assertEqual(call.args, ("s3",))
+        self.assertEqual(
+            call.kwargs["endpoint_url"],
+            environment["PUBLIC_VERSION_S3_ENDPOINT_URL"],
+        )
+        self.assertEqual(call.kwargs["region_name"], "test-region")
+        self.assertEqual(
+            call.kwargs["config"].s3,
+            {"addressing_style": "path"},
+        )
 
     def test_pdf_bundle_round_trip_checks_expected_files_and_size(self):
         with TemporaryDirectory() as temp_dir:
