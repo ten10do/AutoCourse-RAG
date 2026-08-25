@@ -1343,6 +1343,8 @@ def health(
     if knowledge_base_id == PUBLIC_KNOWLEDGE_BASE_ID:
         internal_sync_status = public_version_synchronizer.status()
         sync_status = {
+            "storage_backend": version_store.backend_name,
+            "persistent": version_store.backend_name == "s3",
             "status": internal_sync_status["status"],
             "remote_active_version": internal_sync_status[
                 "remote_active_version"
